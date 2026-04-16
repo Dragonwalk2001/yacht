@@ -104,8 +104,10 @@ func _refresh_category_list() -> void:
 			preview = ScoringRules.score_category(category, game_state.dice_values)
 		var text := "%s  预估:%d" % [ScoringRules.get_label(category), preview]
 		if is_used:
-			var scored := game_state.get_current_player()["scores"][category]
-			text = "%s  已用:%d" % [ScoringRules.get_label(category), int(scored)]
+			text = "%s  已用:%d" % [
+				ScoringRules.get_label(category),
+				int(game_state.get_current_player()["scores"][category])
+			]
 		category_list.set_item_text(i, text)
 		category_list.set_item_disabled(i, is_used or game_state.has_game_ended())
 		if is_used:
