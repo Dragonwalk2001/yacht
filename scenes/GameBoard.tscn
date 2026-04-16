@@ -42,29 +42,34 @@ text = "掷骰次数"
 
 [node name="DiceBox" type="HBoxContainer" parent="Margin/VBox"]
 layout_mode = 2
-theme_override_constants/separation = 8
+theme_override_constants/separation = 12
 
 [node name="Die1" type="Button" parent="Margin/VBox/DiceBox"]
+custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰1"
 
 [node name="Die2" type="Button" parent="Margin/VBox/DiceBox"]
+custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰2"
 
 [node name="Die3" type="Button" parent="Margin/VBox/DiceBox"]
+custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰3"
 
 [node name="Die4" type="Button" parent="Margin/VBox/DiceBox"]
+custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰4"
 
 [node name="Die5" type="Button" parent="Margin/VBox/DiceBox"]
+custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰5"

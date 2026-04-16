@@ -17,6 +17,14 @@ extends Control
 var game_state := GameState.new()
 var turn_manager := TurnManager.new(game_state)
 var category_ids: Array[String] = []
+const DIE_TEXTURES := {
+	1: preload("res://assets/dice/die_1.svg"),
+	2: preload("res://assets/dice/die_2.svg"),
+	3: preload("res://assets/dice/die_3.svg"),
+	4: preload("res://assets/dice/die_4.svg"),
+	5: preload("res://assets/dice/die_5.svg"),
+	6: preload("res://assets/dice/die_6.svg")
+}
 
 
 func _ready() -> void:
@@ -33,6 +41,7 @@ func _bind_signals() -> void:
 	for i in range(dice_box.get_child_count()):
 		var die_button := dice_box.get_child(i) as Button
 		var index := i
+		die_button.expand_icon = true
 		die_button.toggled.connect(func(_pressed: bool) -> void:
 			_on_dice_toggled(index)
 		)
@@ -77,8 +86,16 @@ func _refresh_turn_labels() -> void:
 func _refresh_dice() -> void:
 	for i in range(dice_box.get_child_count()):
 		var die_button := dice_box.get_child(i) as Button
-		die_button.text = "骰%d: %d" % [i + 1, game_state.dice_values[i]]
+		var value := game_state.dice_values[i]
+		die_button.icon = DIE_TEXTURES.get(value, DIE_TEXTURES[1])
+		die_button.text = ""
 		die_button.button_pressed = game_state.held_flags[i]
+		die_button.modulate = Color(1.0, 0.92, 0.6) if game_state.held_flags[i] else Color(1, 1, 1)
+		die_button.tooltip_text = "骰子%d（点数%d）%s" % [
+			i + 1,
+			value,
+			"已锁定" if game_state.held_flags[i] else "可点击锁定"
+		]
 		die_button.disabled = game_state.rolls_used == 0 or game_state.has_game_ended()
 
 
