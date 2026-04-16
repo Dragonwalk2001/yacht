@@ -74,19 +74,6 @@ layout_mode = 2
 toggle_mode = true
 text = "骰5"
 
-[node name="CategoryList" type="ItemList" parent="Margin/VBox"]
-custom_minimum_size = Vector2(0, 250)
-layout_mode = 2
-select_mode = 0
-
-[node name="ScoreBoard" type="RichTextLabel" parent="Margin/VBox"]
-custom_minimum_size = Vector2(0, 140)
-layout_mode = 2
-bbcode_enabled = false
-fit_content = true
-scroll_active = false
-text = "计分板"
-
 [node name="Controls" type="HBoxContainer" parent="Margin/VBox"]
 layout_mode = 2
 theme_override_constants/separation = 8
@@ -114,5 +101,19 @@ text = "确认落分"
 [node name="NewGameButton" type="Button" parent="Margin/VBox/Controls"]
 layout_mode = 2
 text = "新局"
+
+[node name="PlayerScoreLists" type="HBoxContainer" parent="Margin/VBox"]
+custom_minimum_size = Vector2(0, 220)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="ScoreBoard" type="RichTextLabel" parent="Margin/VBox"]
+custom_minimum_size = Vector2(0, 88)
+layout_mode = 2
+bbcode_enabled = false
+fit_content = true
+scroll_active = false
+text = "计分板"
 
 [node name="ResultPopup" parent="." instance=ExtResource("2")]
