@@ -1,13 +1,6 @@
-extends Node2D
+extends Node
 
-var score1: int = 0
-var score2: int = 0
 
-@onready var score_label: Label = $ScoreLabel
-
-func score(player: int) -> void:
-	if player == 1:
-		score1 += 1
-	else:
-		score2 += 1
-	score_label.text = "%d  :  %d" % [score1, score2]
+func _ready() -> void:
+	if not has_node("GameBoard"):
+		push_error("GameBoard scene instance is missing from Main.")

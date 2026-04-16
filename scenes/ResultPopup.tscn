@@ -1,0 +1,17 @@
+[gd_scene format=3]
+
+[node name="ResultPopup" type="AcceptDialog"]
+title = "对局结果"
+dialog_autowrap = true
+ok_button_text = "关闭"
+
+[node name="ResultText" type="RichTextLabel" parent="."]
+custom_minimum_size = Vector2(460, 260)
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 468.0
+offset_bottom = 268.0
+bbcode_enabled = false
+fit_content = false
+scroll_active = true
+text = "结果"
