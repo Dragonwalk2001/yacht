@@ -1,16 +1,16 @@
 class_name UIController
 extends Control
 
-@onready var status_label: Label = $Margin/VBox/StatusLabel
-@onready var turn_label: Label = $Margin/VBox/TurnLabel
-@onready var rolls_label: Label = $Margin/VBox/RollsLabel
-@onready var dice_box: HBoxContainer = $Margin/VBox/DiceBox
+@onready var status_label: Label = $Margin/VBox/TopRow/LeftColumn/StatusLabel
+@onready var turn_label: Label = $Margin/VBox/TopRow/LeftColumn/TurnLabel
+@onready var rolls_label: Label = $Margin/VBox/TopRow/LeftColumn/RollsLabel
+@onready var dice_box: HBoxContainer = $Margin/VBox/TopRow/LeftColumn/DiceBox
 @onready var player_score_lists: HBoxContainer = $Margin/VBox/PlayerScoreLists
-@onready var score_board: RichTextLabel = $Margin/VBox/ScoreBoard
-@onready var player_count_box: SpinBox = $Margin/VBox/Controls/PlayerCount
-@onready var roll_button: Button = $Margin/VBox/Controls/RollButton
-@onready var score_button: Button = $Margin/VBox/Controls/ScoreButton
-@onready var new_game_button: Button = $Margin/VBox/Controls/NewGameButton
+@onready var score_board: RichTextLabel = $Margin/VBox/TopRow/ScoreBoardPanel/ScoreBoardMargin/ScoreBoard
+@onready var player_count_box: SpinBox = $Margin/VBox/TopRow/LeftColumn/Controls/PlayerCount
+@onready var roll_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/RollButton
+@onready var score_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/ScoreButton
+@onready var new_game_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/NewGameButton
 @onready var result_popup: AcceptDialog = $ResultPopup
 @onready var result_label: RichTextLabel = $ResultPopup/ResultText
 

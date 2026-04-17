@@ -28,61 +28,70 @@ theme_override_constants/margin_bottom = 16
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="StatusLabel" type="Label" parent="Margin/VBox"]
-layout_mode = 2
-text = "状态"
-
-[node name="TurnLabel" type="Label" parent="Margin/VBox"]
-layout_mode = 2
-text = "轮次"
-
-[node name="RollsLabel" type="Label" parent="Margin/VBox"]
-layout_mode = 2
-text = "掷骰次数"
-
-[node name="DiceBox" type="HBoxContainer" parent="Margin/VBox"]
+[node name="TopRow" type="HBoxContainer" parent="Margin/VBox"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="Die1" type="Button" parent="Margin/VBox/DiceBox"]
+[node name="LeftColumn" type="VBoxContainer" parent="Margin/VBox/TopRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="StatusLabel" type="Label" parent="Margin/VBox/TopRow/LeftColumn"]
+layout_mode = 2
+text = "状态"
+
+[node name="TurnLabel" type="Label" parent="Margin/VBox/TopRow/LeftColumn"]
+layout_mode = 2
+text = "轮次"
+
+[node name="RollsLabel" type="Label" parent="Margin/VBox/TopRow/LeftColumn"]
+layout_mode = 2
+text = "掷骰次数"
+
+[node name="DiceBox" type="HBoxContainer" parent="Margin/VBox/TopRow/LeftColumn"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Die1" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
 custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰1"
 
-[node name="Die2" type="Button" parent="Margin/VBox/DiceBox"]
+[node name="Die2" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
 custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰2"
 
-[node name="Die3" type="Button" parent="Margin/VBox/DiceBox"]
+[node name="Die3" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
 custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰3"
 
-[node name="Die4" type="Button" parent="Margin/VBox/DiceBox"]
+[node name="Die4" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
 custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰4"
 
-[node name="Die5" type="Button" parent="Margin/VBox/DiceBox"]
+[node name="Die5" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
 custom_minimum_size = Vector2(92, 92)
 layout_mode = 2
 toggle_mode = true
 text = "骰5"
 
-[node name="Controls" type="HBoxContainer" parent="Margin/VBox"]
+[node name="Controls" type="HBoxContainer" parent="Margin/VBox/TopRow/LeftColumn"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="PlayerCountLabel" type="Label" parent="Margin/VBox/Controls"]
+[node name="PlayerCountLabel" type="Label" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
 layout_mode = 2
 text = "玩家数"
 
-[node name="PlayerCount" type="SpinBox" parent="Margin/VBox/Controls"]
+[node name="PlayerCount" type="SpinBox" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
 custom_minimum_size = Vector2(90, 0)
 layout_mode = 2
 min_value = 1.0
@@ -90,30 +99,41 @@ max_value = 4.0
 value = 2.0
 rounded = true
 
-[node name="RollButton" type="Button" parent="Margin/VBox/Controls"]
+[node name="RollButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
 layout_mode = 2
 text = "掷骰"
 
-[node name="ScoreButton" type="Button" parent="Margin/VBox/Controls"]
+[node name="ScoreButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
 layout_mode = 2
 text = "确认落分"
 
-[node name="NewGameButton" type="Button" parent="Margin/VBox/Controls"]
+[node name="NewGameButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
 layout_mode = 2
 text = "新局"
+
+[node name="ScoreBoardPanel" type="PanelContainer" parent="Margin/VBox/TopRow"]
+custom_minimum_size = Vector2(320, 0)
+layout_mode = 2
+
+[node name="ScoreBoardMargin" type="MarginContainer" parent="Margin/VBox/TopRow/ScoreBoardPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="ScoreBoard" type="RichTextLabel" parent="Margin/VBox/TopRow/ScoreBoardPanel/ScoreBoardMargin"]
+custom_minimum_size = Vector2(280, 96)
+layout_mode = 2
+bbcode_enabled = false
+fit_content = true
+scroll_active = false
+text = "计分板"
 
 [node name="PlayerScoreLists" type="HBoxContainer" parent="Margin/VBox"]
 custom_minimum_size = Vector2(0, 220)
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 8
-
-[node name="ScoreBoard" type="RichTextLabel" parent="Margin/VBox"]
-custom_minimum_size = Vector2(0, 88)
-layout_mode = 2
-bbcode_enabled = false
-fit_content = true
-scroll_active = false
-text = "计分板"
 
 [node name="ResultPopup" parent="." instance=ExtResource("2")]
