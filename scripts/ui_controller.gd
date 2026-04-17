@@ -7,10 +7,10 @@ extends Control
 @onready var dice_box: HBoxContainer = $Margin/VBox/TopRow/LeftColumn/DiceBox
 @onready var player_score_lists: HBoxContainer = $Margin/VBox/PlayerScoreLists
 @onready var score_board: RichTextLabel = $Margin/VBox/TopRow/ScoreBoardPanel/ScoreBoardMargin/ScoreBoard
-@onready var player_count_box: SpinBox = $Margin/VBox/TopRow/LeftColumn/Controls/PlayerCount
 @onready var roll_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/RollButton
 @onready var score_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/ScoreButton
 @onready var new_game_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/NewGameButton
+@onready var new_game_confirm_dialog: ConfirmationDialog = $NewGameConfirmDialog
 @onready var result_popup: AcceptDialog = $ResultPopup
 @onready var result_label: RichTextLabel = $ResultPopup/ResultText
 
@@ -19,6 +19,7 @@ var turn_manager := TurnManager.new(game_state)
 var category_ids: Array[String] = []
 var selected_category_id := ""
 var selected_player_index := -1
+var configured_player_count := 2
 const DIE_TEXTURES := {
 	1: preload("res://assets/dice/die_1.svg"),
 	2: preload("res://assets/dice/die_2.svg"),
@@ -33,13 +34,13 @@ func _ready() -> void:
 	randomize()
 	_bind_signals()
 	_build_categories()
-	_start_new_game(2)
 
 
 func _bind_signals() -> void:
 	roll_button.pressed.connect(_on_roll_pressed)
 	score_button.pressed.connect(_on_score_pressed)
 	new_game_button.pressed.connect(_on_new_game_pressed)
+	new_game_confirm_dialog.confirmed.connect(_on_new_game_confirmed)
 	for i in range(dice_box.get_child_count()):
 		var die_button := dice_box.get_child(i) as Button
 		var index := i
@@ -56,7 +57,8 @@ func _build_categories() -> void:
 
 
 func _start_new_game(player_count: int) -> void:
-	turn_manager.start_new_game(player_count)
+	configured_player_count = clampi(player_count, 1, 4)
+	turn_manager.start_new_game(configured_player_count)
 	selected_category_id = ""
 	selected_player_index = -1
 	status_label.text = "新对局开始。"
@@ -205,7 +207,17 @@ func _on_score_pressed() -> void:
 
 
 func _on_new_game_pressed() -> void:
-	_start_new_game(int(player_count_box.value))
+	new_game_confirm_dialog.dialog_text = "确定开始新局吗？当前对局进度将丢失。"
+	new_game_confirm_dialog.popup_centered_ratio(0.38)
+
+
+func _on_new_game_confirmed() -> void:
+	_start_new_game(configured_player_count)
+
+
+func start_session(player_count: int) -> void:
+	visible = true
+	_start_new_game(player_count)
 
 
 func _on_dice_toggled(index: int) -> void:
