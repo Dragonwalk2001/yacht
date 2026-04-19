@@ -11,11 +11,19 @@ extends Control
 @onready var score_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/ScoreButton
 @onready var auto_button: Button = $Margin/VBox/TopRow/LeftColumn/Controls/AutoButton
 @onready var auto_timer: Timer = $AutoTimer
+@onready var throw_timer: Timer = $ThrowTimer
+@onready var throw_pulse_timer: Timer = $ThrowPulseTimer
 
 var game_state := GameState.new()
 var turn_manager := TurnManager.new(game_state)
 var upgrade_buttons: Dictionary = {}
+var is_throwing: bool = false
+var throw_source: String = ""
+var queued_auto_cycles: int = 0
+var throw_visual_values: Array[int] = []
 const SAVE_PATH := "user://savegame.json"
+const THROW_ANIMATION_SEC: float = 0.5
+const THROW_PULSE_SEC: float = 0.08
 const DIE_TEXTURES := {
 	1: preload("res://assets/dice/die_1.svg"),
 	2: preload("res://assets/dice/die_2.svg"),
@@ -36,6 +44,8 @@ func _bind_signals() -> void:
 	score_button.pressed.connect(_on_settle_pressed)
 	auto_button.pressed.connect(_on_auto_pressed)
 	auto_timer.timeout.connect(_on_auto_timer_timeout)
+	throw_timer.timeout.connect(_on_throw_timer_timeout)
+	throw_pulse_timer.timeout.connect(_on_throw_pulse_timer_timeout)
 	for i in range(dice_box.get_child_count()):
 		var die_button := dice_box.get_child(i) as Button
 		var index := i
@@ -81,6 +91,12 @@ func _create_upgrade_button(parent: Node, callback: Callable) -> Button:
 func _start_new_game() -> void:
 	turn_manager.start_new_game()
 	auto_timer.stop()
+	throw_timer.stop()
+	throw_pulse_timer.stop()
+	is_throwing = false
+	throw_source = ""
+	queued_auto_cycles = 0
+	throw_visual_values.clear()
 	_apply_auto_timer()
 	status_label.text = "新对局开始。"
 	roll_button.text = "手动掷骰"
@@ -114,16 +130,21 @@ func _refresh_dice() -> void:
 		if not visible_for_count:
 			continue
 		var value := game_state.current_dice_values[i]
+		if is_throwing and i < throw_visual_values.size():
+			value = throw_visual_values[i]
 		die_button.icon = DIE_TEXTURES.get(value, DIE_TEXTURES[1])
 		die_button.text = ""
-		die_button.button_pressed = game_state.current_holds[i]
-		die_button.modulate = Color(1.0, 0.92, 0.6) if game_state.current_holds[i] else Color(1, 1, 1)
+		die_button.button_pressed = game_state.current_holds[i] if not is_throwing else false
+		if is_throwing:
+			die_button.modulate = Color(0.85, 0.9, 1.0)
+		else:
+			die_button.modulate = Color(1.0, 0.92, 0.6) if game_state.current_holds[i] else Color(1, 1, 1)
 		die_button.tooltip_text = "骰子%d（点数%d）%s" % [
 			i + 1,
 			value,
 			"已锁定" if game_state.current_holds[i] else "可点击锁定"
 		]
-		die_button.disabled = game_state.current_rolls_used == 0
+		die_button.disabled = is_throwing or game_state.auto_enabled or game_state.current_rolls_used == 0
 
 
 func _refresh_upgrade_panel() -> void:
@@ -157,7 +178,7 @@ func _refresh_upgrade_panel() -> void:
 	var auto_speed_btn := upgrade_buttons.get("auto_speed") as Button
 	auto_speed_btn.text = "自动速度 Lv.%d  花费:%s  间隔:%.2fs" % [
 		game_state.auto_speed_level,
-		"-" if auto_speed_cost < 0 else str(auto_speed_cost),
+		"MAX" if auto_speed_cost < 0 else str(auto_speed_cost),
 		game_state.get_auto_interval()
 	]
 	auto_speed_btn.disabled = auto_speed_cost < 0 or game_state.coin_1 < auto_speed_cost
@@ -182,22 +203,29 @@ func _refresh_score_board() -> void:
 
 
 func _update_button_states() -> void:
-	roll_button.disabled = not game_state.can_manual_roll()
-	score_button.disabled = not game_state.can_settle_manual()
+	roll_button.disabled = is_throwing or game_state.auto_enabled or not game_state.can_manual_roll()
+	score_button.disabled = is_throwing or game_state.auto_enabled or not game_state.can_settle_manual()
 	auto_button.disabled = not game_state.auto_unlocked
 	auto_button.text = "自动:%s" % ["开启" if game_state.auto_enabled else "关闭"]
 
 
 func _on_roll_pressed() -> void:
+	if is_throwing:
+		status_label.text = "投掷表现中，请稍候。"
+		return
 	var result := turn_manager.roll_manual_dice()
 	if not result["ok"]:
 		status_label.text = result["message"]
 	else:
-		status_label.text = "掷骰完成，可锁骰并继续重投，或直接结算。"
+		status_label.text = "手动投掷中..."
+		_start_throw_phase("manual")
 	_refresh_all()
 
 
 func _on_settle_pressed() -> void:
+	if is_throwing:
+		status_label.text = "投掷表现中，暂不可结算。"
+		return
 	var result := turn_manager.settle_manual_turn()
 	if not result["ok"]:
 		status_label.text = result["message"]
@@ -234,7 +262,7 @@ func has_continue_save() -> bool:
 
 
 func _on_dice_toggled(index: int) -> void:
-	if game_state.current_rolls_used == 0:
+	if is_throwing or game_state.auto_enabled or game_state.current_rolls_used == 0:
 		_refresh_dice()
 		return
 	turn_manager.toggle_hold(index)
@@ -250,20 +278,17 @@ func _on_auto_pressed() -> void:
 		status_label.text = "自动扔骰已开启。"
 	else:
 		status_label.text = "自动扔骰已关闭。"
+		queued_auto_cycles = 0
 	_apply_auto_timer()
 	_save_game()
 	_refresh_all()
 
 
 func _on_auto_timer_timeout() -> void:
-	var result := turn_manager.run_auto_tick()
-	if result.get("ok", false):
-		status_label.text = "自动结算 +%d（%d桌）" % [
-			int(result["income"]),
-			int(result["turns"])
-		]
-		_save_game()
-	_refresh_all()
+	if is_throwing:
+		queued_auto_cycles = mini(3, queued_auto_cycles + 1)
+		return
+	_start_auto_throw_cycle()
 
 
 func _apply_auto_timer() -> void:
@@ -275,6 +300,8 @@ func _apply_auto_timer() -> void:
 
 
 func _on_upgrade_dice_pressed() -> void:
+	if is_throwing:
+		return
 	var result := game_state.upgrade_dice_count()
 	status_label.text = "骰子数量提升到 %d。" % [game_state.dice_count] if result["ok"] else String(result["message"])
 	if result["ok"]:
@@ -283,6 +310,8 @@ func _on_upgrade_dice_pressed() -> void:
 
 
 func _on_upgrade_table_pressed() -> void:
+	if is_throwing:
+		return
 	var result := game_state.upgrade_table_count()
 	status_label.text = "骰桌数量提升到 %d。" % [game_state.table_count] if result["ok"] else String(result["message"])
 	if result["ok"]:
@@ -291,6 +320,8 @@ func _on_upgrade_table_pressed() -> void:
 
 
 func _on_upgrade_auto_unlock_pressed() -> void:
+	if is_throwing:
+		return
 	var result := game_state.unlock_auto()
 	if result["ok"]:
 		status_label.text = "已解锁自动扔骰。"
@@ -302,6 +333,8 @@ func _on_upgrade_auto_unlock_pressed() -> void:
 
 
 func _on_upgrade_auto_speed_pressed() -> void:
+	if is_throwing:
+		return
 	var result := game_state.upgrade_auto_speed()
 	if result["ok"]:
 		status_label.text = "自动速度提升到 Lv.%d。" % [game_state.auto_speed_level]
@@ -338,3 +371,64 @@ func _load_game() -> bool:
 	status_label.text = "已加载存档。"
 	_refresh_all()
 	return true
+
+
+func _start_throw_phase(source: String) -> void:
+	is_throwing = true
+	throw_source = source
+	_fill_throw_visual_values()
+	throw_timer.stop()
+	throw_timer.wait_time = THROW_ANIMATION_SEC
+	throw_timer.start()
+	throw_pulse_timer.stop()
+	throw_pulse_timer.wait_time = THROW_PULSE_SEC
+	throw_pulse_timer.start()
+	_refresh_all()
+
+
+func _fill_throw_visual_values() -> void:
+	throw_visual_values = []
+	for _i in range(game_state.dice_count):
+		throw_visual_values.append(randi_range(DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
+
+
+func _on_throw_pulse_timer_timeout() -> void:
+	if not is_throwing:
+		throw_pulse_timer.stop()
+		return
+	_fill_throw_visual_values()
+	_refresh_dice()
+
+
+func _on_throw_timer_timeout() -> void:
+	if not is_throwing:
+		return
+	is_throwing = false
+	throw_pulse_timer.stop()
+	throw_visual_values.clear()
+
+	if throw_source == "manual":
+		status_label.text = "掷骰完成，可锁骰并继续重投，或直接结算。"
+	elif throw_source == "auto":
+		var settle := turn_manager.finalize_auto_throw_cycle()
+		if settle.get("ok", false):
+			status_label.text = "自动结算：%s  +%d（%d桌）" % [
+				String(settle["pattern_label"]),
+				int(settle["income"]),
+				int(settle["turns"])
+			]
+			_save_game()
+	throw_source = ""
+	_refresh_all()
+
+	if game_state.auto_enabled and queued_auto_cycles > 0 and not is_throwing:
+		queued_auto_cycles -= 1
+		_start_auto_throw_cycle()
+
+
+func _start_auto_throw_cycle() -> void:
+	var begin := turn_manager.begin_auto_throw_cycle()
+	if not begin.get("ok", false):
+		return
+	status_label.text = "自动投掷中..."
+	_start_throw_phase("auto")

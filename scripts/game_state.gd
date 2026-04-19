@@ -6,9 +6,11 @@ const MIN_DICE_COUNT: int = 1
 const MAX_DICE_COUNT: int = 7
 const MIN_TABLE_COUNT: int = 1
 const MAX_TABLE_COUNT: int = 8
-const BASE_AUTO_INTERVAL: float = 2.2
-const MIN_AUTO_INTERVAL: float = 0.45
+const BASE_AUTO_INTERVAL: float = 3.0
+const MIN_AUTO_INTERVAL: float = 1.0
 const AUTO_INTERVAL_STEP: float = 0.2
+const MAX_AUTO_SPEED_LEVEL: int = 10
+const AUTO_SPEED_BASE_COST: int = 100
 
 var coin_1: int = 0
 var total_coin_earned: int = 0
@@ -27,6 +29,7 @@ var last_settlement_income: int = 0
 var last_settlement_base: int = 0
 var last_settlement_multiplier: float = 1.0
 var recent_income_window: Array[Dictionary] = []
+var pending_auto_cycle_dice: Array[int] = []
 
 func initialize() -> void:
 	coin_1 = 0
@@ -44,6 +47,7 @@ func initialize() -> void:
 	last_settlement_base = 0
 	last_settlement_multiplier = 1.0
 	recent_income_window.clear()
+	pending_auto_cycle_dice.clear()
 	_reset_manual_turn()
 
 
@@ -101,22 +105,39 @@ func settle_manual_turn() -> Dictionary:
 func run_auto_tick() -> Dictionary:
 	if not auto_unlocked or not auto_enabled:
 		return {"ok": false}
-	var turns_done := 0
-	var total_income := 0
-	for _table_index in range(table_count):
+	return {"ok": true}
+
+
+func begin_auto_throw_cycle() -> Dictionary:
+	if not auto_unlocked or not auto_enabled:
+		return {"ok": false, "message": "自动系统未启用。"}
+	pending_auto_cycle_dice = _build_auto_cycle_dice()
+	current_dice_values = pending_auto_cycle_dice.duplicate()
+	current_holds = DiceLogic.create_default_holds(dice_count)
+	current_rolls_used = 0
+	return {"ok": true}
+
+
+func finalize_auto_throw_cycle() -> Dictionary:
+	if pending_auto_cycle_dice.is_empty():
+		return {"ok": false, "message": "没有待结算的自动投掷。"}
+	var snapshot := _evaluate_income_for_dice(pending_auto_cycle_dice)
+	var total_income := int(snapshot["income"])
+	for _table_index in range(table_count - 1):
 		total_income += _simulate_auto_table_income()
-		turns_done += 1
 	_add_coin(total_income)
-	total_auto_turns += turns_done
-	last_settlement_label = "自动结算"
-	last_settlement_base = 0
-	last_settlement_multiplier = get_progress_multiplier()
+	total_auto_turns += table_count
+	last_settlement_label = "%s(自动)" % [String(snapshot["label"])]
+	last_settlement_base = int(snapshot["base"])
+	last_settlement_multiplier = float(snapshot["multiplier"])
 	last_settlement_income = total_income
 	_record_income_event(total_income)
+	pending_auto_cycle_dice.clear()
 	return {
 		"ok": true,
 		"income": total_income,
-		"turns": turns_done
+		"turns": table_count,
+		"pattern_label": last_settlement_label
 	}
 
 
@@ -188,7 +209,9 @@ func unlock_auto() -> Dictionary:
 func get_auto_speed_upgrade_cost() -> int:
 	if not auto_unlocked:
 		return -1
-	return int(120 * pow(1.8, auto_speed_level))
+	if auto_speed_level >= MAX_AUTO_SPEED_LEVEL:
+		return -1
+	return AUTO_SPEED_BASE_COST * int(pow(2.0, auto_speed_level))
 
 
 func can_upgrade_auto_speed() -> bool:
@@ -232,6 +255,12 @@ func estimate_income_per_second() -> float:
 
 
 func _simulate_auto_table_income() -> int:
+	var dice := _build_auto_cycle_dice()
+	var snapshot := _evaluate_income_for_dice(dice)
+	return int(snapshot["income"])
+
+
+func _build_auto_cycle_dice() -> Array[int]:
 	var dice := DiceLogic.roll_fresh_dice(dice_count)
 	# Auto keeps strong dice on rerolls to emulate simple strategy.
 	for _i in range(MAX_ROLLS_PER_TURN - 1):
@@ -239,8 +268,7 @@ func _simulate_auto_table_income() -> int:
 		for value in dice:
 			holds.append(value >= 5)
 		dice = DiceLogic.roll_dice(dice, holds)
-	var snapshot := _evaluate_income_for_dice(dice)
-	return int(snapshot["income"])
+	return dice
 
 
 func _simulate_background_table_income() -> int:
@@ -296,7 +324,8 @@ func to_save_data() -> Dictionary:
 		"last_settlement_income": last_settlement_income,
 		"last_settlement_base": last_settlement_base,
 		"last_settlement_multiplier": last_settlement_multiplier,
-		"recent_income_window": recent_income_window.duplicate(true)
+		"recent_income_window": recent_income_window.duplicate(true),
+		"pending_auto_cycle_dice": pending_auto_cycle_dice.duplicate()
 	}
 
 
@@ -344,5 +373,12 @@ func load_from_save_data(data: Dictionary) -> bool:
 			})
 	if recent_income_window.size() > 12:
 		recent_income_window = recent_income_window.slice(recent_income_window.size() - 12, recent_income_window.size())
+
+	pending_auto_cycle_dice = []
+	var saved_pending_dice: Array = data.get("pending_auto_cycle_dice", [])
+	for value in saved_pending_dice:
+		pending_auto_cycle_dice.append(clampi(int(value), DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
+	if pending_auto_cycle_dice.size() != dice_count:
+		pending_auto_cycle_dice.clear()
 
 	return true

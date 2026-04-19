@@ -26,3 +26,11 @@ func settle_manual_turn() -> Dictionary:
 
 func run_auto_tick() -> Dictionary:
 	return game_state.run_auto_tick()
+
+
+func begin_auto_throw_cycle() -> Dictionary:
+	return game_state.begin_auto_throw_cycle()
+
+
+func finalize_auto_throw_cycle() -> Dictionary:
+	return game_state.finalize_auto_throw_cycle()
