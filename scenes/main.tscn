@@ -48,30 +48,19 @@ text = "Yacht 骰子"
 [node name="HintLabel" type="Label" parent="HomeScreen/Margin/Panel/VBox"]
 layout_mode = 2
 horizontal_alignment = 1
-text = "先选择人数，然后开始新对局"
-
-[node name="PlayerCountRow" type="HBoxContainer" parent="HomeScreen/Margin/Panel/VBox"]
-layout_mode = 2
-alignment = 1
-theme_override_constants/separation = 8
-
-[node name="PlayerCountLabel" type="Label" parent="HomeScreen/Margin/Panel/VBox/PlayerCountRow"]
-layout_mode = 2
-text = "玩家人数"
-
-[node name="PlayerCount" type="SpinBox" parent="HomeScreen/Margin/Panel/VBox/PlayerCountRow"]
-custom_minimum_size = Vector2(110, 0)
-layout_mode = 2
-min_value = 1.0
-max_value = 4.0
-value = 2.0
-rounded = true
+text = "选择开始新游戏，或继续上次进度"
 
 [node name="StartButton" type="Button" parent="HomeScreen/Margin/Panel/VBox"]
 custom_minimum_size = Vector2(0, 46)
 layout_mode = 2
 theme_override_font_sizes/font_size = 20
-text = "开始对局"
+text = "开始游戏"
+
+[node name="ContinueButton" type="Button" parent="HomeScreen/Margin/Panel/VBox"]
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "继续游戏"
 
 [node name="GameBoard" parent="." instance=ExtResource("1")]
 visible = false

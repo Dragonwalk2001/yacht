@@ -83,6 +83,18 @@ layout_mode = 2
 toggle_mode = true
 text = "骰5"
 
+[node name="Die6" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
+custom_minimum_size = Vector2(92, 92)
+layout_mode = 2
+toggle_mode = true
+text = "骰6"
+
+[node name="Die7" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
+custom_minimum_size = Vector2(92, 92)
+layout_mode = 2
+toggle_mode = true
+text = "骰7"
+
 [node name="Controls" type="HBoxContainer" parent="Margin/VBox/TopRow/LeftColumn"]
 layout_mode = 2
 theme_override_constants/separation = 8
@@ -93,15 +105,11 @@ text = "掷骰"
 
 [node name="ScoreButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
 layout_mode = 2
-text = "确认落分"
+text = "结算本回合"
 
-[node name="NewGameButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
-custom_minimum_size = Vector2(110, 42)
+[node name="AutoButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
 layout_mode = 2
-theme_override_colors/font_color = Color(1, 1, 1, 1)
-theme_override_font_sizes/font_size = 18
-modulate = Color(0.88, 0.22, 0.24, 1)
-text = "新局"
+text = "自动:关闭"
 
 [node name="ScoreBoardPanel" type="PanelContainer" parent="Margin/VBox/TopRow"]
 custom_minimum_size = Vector2(320, 0)
@@ -130,7 +138,6 @@ theme_override_constants/separation = 8
 
 [node name="ResultPopup" parent="." instance=ExtResource("2")]
 
-[node name="NewGameConfirmDialog" type="ConfirmationDialog" parent="."]
-title = "确认新局"
-dialog_text = "确定开始新局吗？当前对局进度将丢失。"
-ok_button_text = "确定"
+[node name="AutoTimer" type="Timer" parent="."]
+wait_time = 2.0
+one_shot = false
