@@ -10,11 +10,16 @@ const _TimeSpeedSettings := preload("res://scripts/time_speed_settings.gd")
 @onready var tables_grid: GridContainer = $Margin/VBox/TopRow/LeftColumn/TablesScroll/TablesGrid
 @onready var score_board: RichTextLabel = $Margin/VBox/TopRow/ScoreBoardPanel/ScoreBoardMargin/ScoreBoard
 @onready var menu_button: MenuButton = $Margin/VBox/MenuRow/MenuButton
+@onready var growth_button: Button = $Margin/VBox/MenuRow/GrowthButton
 @onready var throw_pulse_timer: Timer = $ThrowPulseTimer
 
 var dice_stats_dialog: AcceptDialog
 var growth_window: Window
 var growth_coin_label: Label
+var growth_node_panels: Dictionary = {}
+var growth_detail_richtext: RichTextLabel
+var growth_node_detail_text: Dictionary = {}
+var growth_hovered_node_id: String = ""
 var time_speed_window: Window
 var time_speed_slider: HSlider
 var time_speed_value_label: Label
@@ -38,6 +43,11 @@ var table_throw_visuals: Array = []
 var table_queued_auto: Array[int] = []
 
 const SAVE_PATH := "user://savegame.json"
+
+const GROWTH_DETAIL_TABLE := "增加可同时使用的骰桌数量。每桌独立掷骰、锁骰与结算，多桌收益叠加为货币1。"
+const GROWTH_DETAIL_AUTO_UNLOCK := "解锁后每张骰桌可单独开启自动：按当前自动间隔完成投掷与结算，仍播放投掷表现。"
+const GROWTH_DETAIL_AUTO_SPEED := "缩短各桌自动掷骰的等待间隔（全桌同一档位）。逻辑间隔与最短投掷动画独立；过短时排队触发，避免重复结算。"
+const GROWTH_DETAIL_PLACEHOLDER := "将鼠标移到左侧节点上查看说明。"
 const THROW_ANIMATION_SEC: float = 0.5
 const THROW_PULSE_SEC: float = 0.08
 const DIE_TEXTURES := {
@@ -155,10 +165,11 @@ func _init_dice_stats_dialog() -> void:
 
 
 func _init_growth_window() -> void:
+	growth_node_panels.clear()
 	growth_window = Window.new()
 	growth_window.title = "成长与解锁 · 科技树"
-	growth_window.size = Vector2i(540, 480)
-	growth_window.min_size = Vector2i(420, 360)
+	growth_window.size = Vector2i(700, 480)
+	growth_window.min_size = Vector2i(560, 360)
 	growth_window.transient = true
 	growth_window.exclusive = true
 	growth_window.unresizable = false
@@ -180,22 +191,56 @@ func _init_growth_window() -> void:
 	growth_coin_label = Label.new()
 	growth_coin_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	outer.add_child(growth_coin_label)
+	var body := HBoxContainer.new()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 12)
+	outer.add_child(body)
 	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size.x = 148
+	scroll.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	outer.add_child(scroll)
+	body.add_child(scroll)
 	var tree_root := VBoxContainer.new()
+	tree_root.add_theme_constant_override("separation", 4)
 	tree_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tree_root.add_theme_constant_override("separation", 14)
-	tree_root.custom_minimum_size.x = 420
+	tree_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	scroll.add_child(tree_root)
-	var trunk := _growth_tree_panel("骰桌扩张", tree_root)
+	var detail_panel := PanelContainer.new()
+	detail_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var detail_style := _growth_tree_node_stylebox()
+	detail_style.bg_color = Color(0.09, 0.1, 0.12, 1.0)
+	detail_panel.add_theme_stylebox_override("panel", detail_style)
+	body.add_child(detail_panel)
+	var detail_margin := MarginContainer.new()
+	detail_margin.add_theme_constant_override("margin_left", 10)
+	detail_margin.add_theme_constant_override("margin_top", 8)
+	detail_margin.add_theme_constant_override("margin_right", 10)
+	detail_margin.add_theme_constant_override("margin_bottom", 10)
+	detail_panel.add_child(detail_margin)
+	var detail_col := VBoxContainer.new()
+	detail_col.add_theme_constant_override("separation", 8)
+	detail_margin.add_child(detail_col)
+	var detail_title := Label.new()
+	detail_title.text = "说明"
+	detail_title.add_theme_font_size_override("font_size", 14)
+	detail_col.add_child(detail_title)
+	growth_detail_richtext = RichTextLabel.new()
+	growth_detail_richtext.bbcode_enabled = false
+	growth_detail_richtext.fit_content = false
+	growth_detail_richtext.scroll_active = true
+	growth_detail_richtext.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	growth_detail_richtext.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	growth_detail_richtext.custom_minimum_size = Vector2(280, 160)
+	growth_detail_richtext.text = GROWTH_DETAIL_PLACEHOLDER
+	detail_col.add_child(growth_detail_richtext)
 	upgrade_buttons = {}
-	upgrade_buttons["table"] = _create_upgrade_button(trunk, _on_upgrade_table_pressed)
-	_add_growth_tree_connector(tree_root, "↓")
-	var auto_panel := _growth_tree_panel("自动化", tree_root)
-	upgrade_buttons["auto_unlock"] = _create_upgrade_button(auto_panel, _on_upgrade_auto_unlock_pressed)
-	upgrade_buttons["auto_speed"] = _create_upgrade_button(auto_panel, _on_upgrade_auto_speed_pressed)
+	upgrade_buttons["table"] = _create_tech_tree_node(tree_root, "table", _on_upgrade_table_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["auto_unlock"] = _create_tech_tree_node(tree_root, "auto_unlock", _on_upgrade_auto_unlock_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["auto_speed"] = _create_tech_tree_node(tree_root, "auto_speed", _on_upgrade_auto_speed_pressed)
 	add_child(growth_window)
 
 
@@ -253,36 +298,74 @@ func _on_time_speed_slider_changed(v: float) -> void:
 	_save_game()
 
 
-func _growth_tree_panel(subtitle: String, parent: VBoxContainer) -> VBoxContainer:
+func _growth_tree_node_stylebox() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.11, 0.12, 0.14, 1.0)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(0.32, 0.35, 0.4, 1.0)
+	sb.set_corner_radius_all(8)
+	sb.set_content_margin_all(10)
+	return sb
+
+
+func _growth_tree_node_stylebox_compact() -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.11, 0.12, 0.14, 1.0)
+	sb.set_border_width_all(1)
+	sb.border_color = Color(0.3, 0.33, 0.38, 1.0)
+	sb.set_corner_radius_all(4)
+	sb.set_content_margin_all(4)
+	return sb
+
+
+func _create_tech_tree_node(parent: VBoxContainer, node_id: String, callback: Callable) -> Button:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size.x = 132
+	panel.add_theme_stylebox_override("panel", _growth_tree_node_stylebox_compact())
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.mouse_entered.connect(_on_growth_node_hover.bind(node_id))
 	parent.add_child(panel)
-	var inner := VBoxContainer.new()
-	inner.add_theme_constant_override("separation", 8)
-	panel.add_child(inner)
-	var sub := Label.new()
-	sub.text = subtitle
-	sub.add_theme_font_size_override("font_size", 15)
-	inner.add_child(sub)
-	return inner
+	growth_node_panels[node_id] = panel
+	var button := Button.new()
+	button.clip_text = true
+	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	button.custom_minimum_size = Vector2(0, 24)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.add_theme_font_size_override("font_size", 12)
+	button.pressed.connect(callback)
+	button.mouse_entered.connect(_on_growth_node_hover.bind(node_id))
+	button.tooltip_text = ""
+	button.focus_mode = Control.FOCUS_NONE
+	panel.add_child(button)
+	return button
 
 
-func _add_growth_tree_connector(parent: VBoxContainer, text: String) -> void:
+func _add_tech_tree_link(parent: VBoxContainer) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	var lab := Label.new()
-	lab.text = text
-	lab.add_theme_color_override("font_color", Color(0.55, 0.58, 0.62))
-	row.add_child(lab)
+	row.custom_minimum_size.y = 10
+	var line := ColorRect.new()
+	line.custom_minimum_size = Vector2(2, 8)
+	line.color = Color(0.38, 0.41, 0.46, 1.0)
+	row.add_child(line)
 	parent.add_child(row)
+
+
+func _on_growth_node_hover(node_id: String) -> void:
+	growth_hovered_node_id = node_id
+	if growth_detail_richtext == null:
+		return
+	var body_text: Variant = growth_node_detail_text.get(node_id, "")
+	growth_detail_richtext.text = str(body_text) if str(body_text).length() > 0 else GROWTH_DETAIL_PLACEHOLDER
 
 
 func _bind_signals() -> void:
 	var pop := menu_button.get_popup()
 	pop.add_item("掷骰统计…", 0)
-	pop.add_item("成长与解锁…", 1)
-	pop.add_item("时间倍速…", 2)
+	pop.add_item("时间倍速…", 1)
 	pop.id_pressed.connect(_on_game_menu_id_pressed)
+	growth_button.pressed.connect(_on_growth_button_pressed)
 	throw_pulse_timer.timeout.connect(_on_throw_pulse_timer_timeout)
 	for t in range(GameState.MAX_TABLE_COUNT):
 		for d in range(GameState.MAX_DICE_COUNT):
@@ -362,15 +445,6 @@ func _build_table_panels() -> void:
 		table_dice_upgrade_buttons.append(ub)
 		inner.add_child(ub)
 		tables_grid.add_child(panel)
-
-
-func _create_upgrade_button(parent: Node, callback: Callable) -> Button:
-	var button := Button.new()
-	button.custom_minimum_size = Vector2(0, 40)
-	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	button.pressed.connect(callback)
-	parent.add_child(button)
-	return button
 
 
 func _any_table_throwing() -> bool:
@@ -478,26 +552,19 @@ func _refresh_growth_tree() -> void:
 	var auto_speed_cost := game_state.get_auto_speed_upgrade_cost()
 
 	var table_btn := upgrade_buttons.get("table") as Button
-	table_btn.text = "升级骰桌数量（当前%d）  花费:%s" % [
-		game_state.table_count,
-		"MAX" if table_cost < 0 else str(table_cost)
-	]
+	table_btn.text = "骰桌·满" if table_cost < 0 else "骰桌"
 	table_btn.disabled = table_cost < 0 or game_state.coin_1 < table_cost
 
 	var auto_unlock_btn := upgrade_buttons.get("auto_unlock") as Button
 	if game_state.auto_unlocked:
-		auto_unlock_btn.text = "自动扔骰：已解锁"
+		auto_unlock_btn.text = "自动·开"
 		auto_unlock_btn.disabled = true
 	else:
-		auto_unlock_btn.text = "解锁自动扔骰  花费:%d" % auto_unlock_cost
+		auto_unlock_btn.text = "自动"
 		auto_unlock_btn.disabled = game_state.coin_1 < auto_unlock_cost
 
 	var auto_speed_btn := upgrade_buttons.get("auto_speed") as Button
-	auto_speed_btn.text = "自动速度 Lv.%d  花费:%s  间隔:%.2fs（各桌同档）" % [
-		game_state.auto_speed_level,
-		"MAX" if auto_speed_cost < 0 else str(auto_speed_cost),
-		game_state.get_auto_interval()
-	]
+	auto_speed_btn.text = "间隔·满" if auto_speed_cost < 0 else "间隔"
 	auto_speed_btn.disabled = auto_speed_cost < 0 or game_state.coin_1 < auto_speed_cost
 
 	for t in range(GameState.MAX_TABLE_COUNT):
@@ -508,6 +575,45 @@ func _refresh_growth_tree() -> void:
 		btn.visible = true
 		var cost := game_state.get_dice_upgrade_cost(t)
 		btn.text = "桌%d 骰子+1  花费:%s" % [t + 1, "MAX" if cost < 0 else str(cost)]
+
+	_refresh_growth_detail_cache()
+
+
+func _refresh_growth_detail_cache() -> void:
+	var table_cost := game_state.get_table_upgrade_cost()
+	var auto_unlock_cost := game_state.get_auto_unlock_cost()
+	var auto_speed_cost := game_state.get_auto_speed_upgrade_cost()
+
+	var tt_table := GROWTH_DETAIL_TABLE + "\n\n"
+	tt_table += "当前：%d / %d 张骰桌。\n" % [game_state.table_count, GameState.MAX_TABLE_COUNT]
+	if table_cost >= 0:
+		tt_table += "下一档花费：%d 货币1。" % table_cost
+	else:
+		tt_table += "已达到骰桌上限，无法再购买。"
+	growth_node_detail_text["table"] = tt_table
+
+	var tt_unlock := GROWTH_DETAIL_AUTO_UNLOCK + "\n\n"
+	if game_state.auto_unlocked:
+		tt_unlock += "状态：已解锁。"
+	else:
+		tt_unlock += "状态：未解锁。\n购买花费：%d 货币1。" % auto_unlock_cost
+	growth_node_detail_text["auto_unlock"] = tt_unlock
+
+	var tt_speed := GROWTH_DETAIL_AUTO_SPEED + "\n\n"
+	tt_speed += "当前等级：Lv.%d，逻辑间隔 %.2f 秒（各桌同档）。\n" % [
+		game_state.auto_speed_level,
+		game_state.get_auto_interval()
+	]
+	if auto_speed_cost >= 0:
+		tt_speed += "下一档花费：%d 货币1。" % auto_speed_cost
+	else:
+		tt_speed += "已达到自动速度上限，无法再购买。"
+	growth_node_detail_text["auto_speed"] = tt_speed
+
+	if growth_detail_richtext == null:
+		return
+	if growth_hovered_node_id != "" and growth_node_detail_text.has(growth_hovered_node_id):
+		growth_detail_richtext.text = str(growth_node_detail_text[growth_hovered_node_id])
 
 
 func _refresh_score_board() -> void:
@@ -533,12 +639,17 @@ func _on_game_menu_id_pressed(id: int) -> void:
 		dice_stats_dialog.dialog_text = game_state.dice_face_stats.format_dialog_text()
 		dice_stats_dialog.popup_centered()
 	elif id == 1:
-		_refresh_growth_tree()
-		growth_window.popup_centered()
-	elif id == 2:
 		time_speed_slider.set_value_no_signal(time_speed)
 		time_speed_value_label.text = "当前倍速: %d×" % time_speed
 		time_speed_window.popup_centered()
+
+
+func _on_growth_button_pressed() -> void:
+	growth_hovered_node_id = ""
+	if growth_detail_richtext != null:
+		growth_detail_richtext.text = GROWTH_DETAIL_PLACEHOLDER
+	_refresh_growth_tree()
+	growth_window.popup_centered()
 
 
 func _update_all_table_buttons() -> void:
@@ -623,7 +734,7 @@ func _on_dice_toggled(table_index: int, die_index: int) -> void:
 
 func _on_table_auto_pressed(table_index: int) -> void:
 	if not game_state.auto_unlocked:
-		status_label.text = "请先在菜单「成长与解锁」中解锁自动扔骰。"
+		status_label.text = "请先在「成长与解锁」按钮中解锁自动扔骰。"
 		return
 	var next := not game_state.is_table_auto_enabled(table_index)
 	game_state.set_table_auto_enabled(table_index, next)

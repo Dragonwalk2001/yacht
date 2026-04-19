@@ -36,6 +36,10 @@ theme_override_constants/separation = 8
 layout_mode = 2
 text = "菜单"
 
+[node name="GrowthButton" type="Button" parent="Margin/VBox/MenuRow"]
+layout_mode = 2
+text = "成长与解锁"
+
 [node name="MenuSpacer" type="Control" parent="Margin/VBox/MenuRow"]
 layout_mode = 2
 size_flags_horizontal = 3
