@@ -207,8 +207,20 @@ func upgrade_dice_on_table(table_index: int) -> Dictionary:
 		return {"ok": false, "message": "货币1不足。"}
 	coin_1 -= cost
 	table_dice_counts[table_index] = int(table_dice_counts[table_index]) + 1
-	_reset_table_turn(table_index)
-	return {"ok": true}
+	var in_active_turn := int(table_rolls_used[table_index]) > 0
+	var auto_staging: Array = table_auto_staging[table_index]
+	var has_pending_auto := auto_staging.size() > 0
+	if not in_active_turn and not has_pending_auto:
+		var row: Array = table_dice_values[table_index]
+		row.append(1)
+		table_dice_values[table_index] = row
+		var holds: Array = table_holds[table_index]
+		holds.append(false)
+		table_holds[table_index] = holds
+	return {
+		"ok": true,
+		"takes_effect_next_turn": in_active_turn or has_pending_auto
+	}
 
 
 func get_table_upgrade_cost() -> int:

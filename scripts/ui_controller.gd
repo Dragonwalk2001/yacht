@@ -1,6 +1,8 @@
 class_name UIController
 extends Control
 
+const _TimeSpeedSettings := preload("res://scripts/time_speed_settings.gd")
+
 @onready var status_label: Label = $Margin/VBox/TopRow/LeftColumn/StatusLabel
 @onready var turn_label: Label = $Margin/VBox/TopRow/LeftColumn/TurnLabel
 @onready var rolls_label: Label = $Margin/VBox/TopRow/LeftColumn/RollsLabel
@@ -13,6 +15,10 @@ extends Control
 var dice_stats_dialog: AcceptDialog
 var growth_window: Window
 var growth_coin_label: Label
+var time_speed_window: Window
+var time_speed_slider: HSlider
+var time_speed_value_label: Label
+var time_speed: int = 1
 
 var game_state := GameState.new()
 var turn_manager := TurnManager.new(game_state)
@@ -46,8 +52,10 @@ const DIE_TEXTURES := {
 
 func _ready() -> void:
 	randomize()
+	_TimeSpeedSettings.apply_engine_multiplier(time_speed)
 	_init_dice_stats_dialog()
 	_init_growth_window()
+	_init_time_speed_window()
 	_init_throw_tracking_arrays()
 	_create_per_table_timers()
 	_build_table_panels()
@@ -191,6 +199,60 @@ func _init_growth_window() -> void:
 	add_child(growth_window)
 
 
+func _init_time_speed_window() -> void:
+	time_speed_window = Window.new()
+	time_speed_window.title = "时间倍速"
+	time_speed_window.size = Vector2i(400, 160)
+	time_speed_window.min_size = Vector2i(360, 140)
+	time_speed_window.transient = true
+	time_speed_window.exclusive = true
+	time_speed_window.unresizable = true
+	time_speed_window.visible = false
+	time_speed_window.close_requested.connect(func() -> void:
+		time_speed_window.hide()
+	)
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	time_speed_window.add_child(margin)
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.add_theme_constant_override("separation", 12)
+	margin.add_child(vbox)
+	var hint := Label.new()
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.text = "加快或减慢整局游戏时间（含投掷动画与自动计时）。与成长树中的升级无关。"
+	vbox.add_child(hint)
+	time_speed_value_label = Label.new()
+	time_speed_value_label.text = "当前倍速: 1×"
+	vbox.add_child(time_speed_value_label)
+	time_speed_slider = HSlider.new()
+	time_speed_slider.min_value = _TimeSpeedSettings.MIN_MULT
+	time_speed_slider.max_value = _TimeSpeedSettings.MAX_MULT
+	time_speed_slider.step = 1
+	time_speed_slider.tick_count = _TimeSpeedSettings.MAX_MULT - _TimeSpeedSettings.MIN_MULT + 1
+	time_speed_slider.ticks_on_borders = true
+	time_speed_slider.value = time_speed
+	time_speed_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	time_speed_slider.value_changed.connect(_on_time_speed_slider_changed)
+	vbox.add_child(time_speed_slider)
+	add_child(time_speed_window)
+
+
+func _on_time_speed_slider_changed(v: float) -> void:
+	var m := _TimeSpeedSettings.clamp_mult(int(round(v)))
+	time_speed_slider.set_value_no_signal(m)
+	time_speed_value_label.text = "当前倍速: %d×" % m
+	_TimeSpeedSettings.apply_engine_multiplier(m)
+	if m == time_speed:
+		return
+	time_speed = m
+	_save_game()
+
+
 func _growth_tree_panel(subtitle: String, parent: VBoxContainer) -> VBoxContainer:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -219,6 +281,7 @@ func _bind_signals() -> void:
 	var pop := menu_button.get_popup()
 	pop.add_item("掷骰统计…", 0)
 	pop.add_item("成长与解锁…", 1)
+	pop.add_item("时间倍速…", 2)
 	pop.id_pressed.connect(_on_game_menu_id_pressed)
 	throw_pulse_timer.timeout.connect(_on_throw_pulse_timer_timeout)
 	for t in range(GameState.MAX_TABLE_COUNT):
@@ -472,6 +535,10 @@ func _on_game_menu_id_pressed(id: int) -> void:
 	elif id == 1:
 		_refresh_growth_tree()
 		growth_window.popup_centered()
+	elif id == 2:
+		time_speed_slider.set_value_no_signal(time_speed)
+		time_speed_value_label.text = "当前倍速: %d×" % time_speed
+		time_speed_window.popup_centered()
 
 
 func _update_all_table_buttons() -> void:
@@ -483,7 +550,7 @@ func _update_all_table_buttons() -> void:
 		ab.disabled = not game_state.auto_unlocked
 		ab.text = "自动:%s" % ["开" if game_state.is_table_auto_enabled(t) else "关"]
 		var dice_cost := game_state.get_dice_upgrade_cost(t)
-		table_dice_upgrade_buttons[t].disabled = throwing or dice_cost < 0 or game_state.coin_1 < dice_cost
+		table_dice_upgrade_buttons[t].disabled = dice_cost < 0 or game_state.coin_1 < dice_cost
 	for t in range(game_state.table_count, GameState.MAX_TABLE_COUNT):
 		table_roll_buttons[t].disabled = true
 		table_settle_buttons[t].disabled = true
@@ -598,10 +665,14 @@ func _apply_all_auto_timers() -> void:
 
 
 func _on_upgrade_dice_on_table_pressed(table_index: int) -> void:
-	if table_is_throwing[table_index]:
-		return
 	var result := game_state.upgrade_dice_on_table(table_index)
-	status_label.text = "桌%d 骰子数=%d" % [table_index + 1, game_state.get_table_dice_count(table_index)] if result["ok"] else String(result["message"])
+	if result["ok"]:
+		if bool(result.get("takes_effect_next_turn", false)):
+			status_label.text = "桌%d 骰子已升级；新骰子将从下一次投掷生效。" % [table_index + 1]
+		else:
+			status_label.text = "桌%d 骰子数=%d" % [table_index + 1, game_state.get_table_dice_count(table_index)]
+	else:
+		status_label.text = String(result["message"])
 	if result["ok"]:
 		_save_game()
 	_refresh_all()
@@ -610,10 +681,12 @@ func _on_upgrade_dice_on_table_pressed(table_index: int) -> void:
 func _on_upgrade_table_pressed() -> void:
 	if _any_table_throwing():
 		return
+	var previous_table_count := game_state.table_count
 	var result := game_state.upgrade_table_count()
 	status_label.text = "骰桌数量提升到 %d。" % [game_state.table_count] if result["ok"] else String(result["message"])
 	if result["ok"]:
-		_apply_all_auto_timers()
+		if previous_table_count < game_state.table_count:
+			_apply_table_auto_timer(previous_table_count)
 		_save_game()
 	_refresh_all()
 
@@ -649,7 +722,12 @@ func _save_game() -> void:
 	if file == null:
 		push_warning("无法写入存档。")
 		return
-	file.store_string(JSON.stringify(game_state.to_save_data()))
+	var bundle := {
+		"bundle": 1,
+		"game": game_state.to_save_data(),
+		"time_speed": time_speed
+	}
+	file.store_string(JSON.stringify(bundle))
 
 
 func _load_game() -> bool:
@@ -662,9 +740,16 @@ func _load_game() -> bool:
 	var parsed: Variant = JSON.parse_string(text)
 	if not (parsed is Dictionary):
 		return false
-	var ok := game_state.load_from_save_data(parsed)
+	var game_dict: Dictionary = parsed
+	if parsed.has("game") and parsed["game"] is Dictionary:
+		game_dict = parsed["game"]
+		time_speed = _TimeSpeedSettings.clamp_mult(int(parsed.get("time_speed", 1)))
+	else:
+		time_speed = 1
+	var ok := game_state.load_from_save_data(game_dict)
 	if not ok:
 		return false
+	_TimeSpeedSettings.apply_engine_multiplier(time_speed)
 	for i in range(GameState.MAX_TABLE_COUNT):
 		table_throw_timers[i].stop()
 		table_auto_timers[i].stop()
