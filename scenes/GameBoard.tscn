@@ -28,13 +28,27 @@ theme_override_constants/margin_bottom = 16
 layout_mode = 2
 theme_override_constants/separation = 10
 
+[node name="MenuRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="MenuButton" type="MenuButton" parent="Margin/VBox/MenuRow"]
+layout_mode = 2
+text = "菜单"
+
+[node name="MenuSpacer" type="Control" parent="Margin/VBox/MenuRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
 [node name="TopRow" type="HBoxContainer" parent="Margin/VBox"]
 layout_mode = 2
+size_flags_vertical = 3
 theme_override_constants/separation = 12
 
 [node name="LeftColumn" type="VBoxContainer" parent="Margin/VBox/TopRow"]
 layout_mode = 2
 size_flags_horizontal = 3
+size_flags_vertical = 3
 theme_override_constants/separation = 10
 
 [node name="StatusLabel" type="Label" parent="Margin/VBox/TopRow/LeftColumn"]
@@ -49,67 +63,20 @@ text = "轮次"
 layout_mode = 2
 text = "掷骰次数"
 
-[node name="DiceBox" type="HBoxContainer" parent="Margin/VBox/TopRow/LeftColumn"]
+[node name="TablesScroll" type="ScrollContainer" parent="Margin/VBox/TopRow/LeftColumn"]
 layout_mode = 2
-theme_override_constants/separation = 12
+size_flags_vertical = 3
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 260)
+horizontal_scroll_mode = 0
+vertical_scroll_mode = 1
 
-[node name="Die1" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
-custom_minimum_size = Vector2(92, 92)
+[node name="TablesGrid" type="GridContainer" parent="Margin/VBox/TopRow/LeftColumn/TablesScroll"]
 layout_mode = 2
-toggle_mode = true
-text = "骰1"
-
-[node name="Die2" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
-custom_minimum_size = Vector2(92, 92)
-layout_mode = 2
-toggle_mode = true
-text = "骰2"
-
-[node name="Die3" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
-custom_minimum_size = Vector2(92, 92)
-layout_mode = 2
-toggle_mode = true
-text = "骰3"
-
-[node name="Die4" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
-custom_minimum_size = Vector2(92, 92)
-layout_mode = 2
-toggle_mode = true
-text = "骰4"
-
-[node name="Die5" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
-custom_minimum_size = Vector2(92, 92)
-layout_mode = 2
-toggle_mode = true
-text = "骰5"
-
-[node name="Die6" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
-custom_minimum_size = Vector2(92, 92)
-layout_mode = 2
-toggle_mode = true
-text = "骰6"
-
-[node name="Die7" type="Button" parent="Margin/VBox/TopRow/LeftColumn/DiceBox"]
-custom_minimum_size = Vector2(92, 92)
-layout_mode = 2
-toggle_mode = true
-text = "骰7"
-
-[node name="Controls" type="HBoxContainer" parent="Margin/VBox/TopRow/LeftColumn"]
-layout_mode = 2
-theme_override_constants/separation = 8
-
-[node name="RollButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
-layout_mode = 2
-text = "掷骰"
-
-[node name="ScoreButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
-layout_mode = 2
-text = "结算本回合"
-
-[node name="AutoButton" type="Button" parent="Margin/VBox/TopRow/LeftColumn/Controls"]
-layout_mode = 2
-text = "自动:关闭"
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 10
+theme_override_constants/v_separation = 10
+columns = 2
 
 [node name="ScoreBoardPanel" type="PanelContainer" parent="Margin/VBox/TopRow"]
 custom_minimum_size = Vector2(320, 0)
@@ -130,21 +97,7 @@ fit_content = true
 scroll_active = false
 text = "计分板"
 
-[node name="PlayerScoreLists" type="HBoxContainer" parent="Margin/VBox"]
-custom_minimum_size = Vector2(0, 220)
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 8
-
 [node name="ResultPopup" parent="." instance=ExtResource("2")]
-
-[node name="AutoTimer" type="Timer" parent="."]
-wait_time = 2.0
-one_shot = false
-
-[node name="ThrowTimer" type="Timer" parent="."]
-wait_time = 0.5
-one_shot = true
 
 [node name="ThrowPulseTimer" type="Timer" parent="."]
 wait_time = 0.08

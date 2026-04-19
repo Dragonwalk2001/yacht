@@ -1,6 +1,8 @@
 class_name GameState
 extends RefCounted
 
+const DiceFaceStatsT := preload("res://scripts/dice_face_stats.gd")
+
 const MAX_ROLLS_PER_TURN: int = 3
 const MIN_DICE_COUNT: int = 1
 const MAX_DICE_COUNT: int = 7
@@ -14,13 +16,8 @@ const AUTO_SPEED_BASE_COST: int = 100
 
 var coin_1: int = 0
 var total_coin_earned: int = 0
-var current_rolls_used: int = 0
-var current_dice_values: Array[int] = []
-var current_holds: Array[bool] = []
 var table_count: int = MIN_TABLE_COUNT
-var dice_count: int = MIN_DICE_COUNT
 var auto_unlocked: bool = false
-var auto_enabled: bool = false
 var auto_speed_level: int = 0
 var total_manual_turns: int = 0
 var total_auto_turns: int = 0
@@ -29,16 +26,21 @@ var last_settlement_income: int = 0
 var last_settlement_base: int = 0
 var last_settlement_multiplier: float = 1.0
 var recent_income_window: Array[Dictionary] = []
-var pending_auto_cycle_dice: Array[int] = []
+var dice_face_stats = DiceFaceStatsT.new()
+
+var table_dice_counts: Array = []
+var table_rolls_used: Array = []
+var table_dice_values: Array = []
+var table_holds: Array = []
+var per_table_auto_enabled: Array = []
+var table_auto_staging: Array = []
+
 
 func initialize() -> void:
 	coin_1 = 0
 	total_coin_earned = 0
-	current_rolls_used = 0
-	dice_count = MIN_DICE_COUNT
 	table_count = MIN_TABLE_COUNT
 	auto_unlocked = false
-	auto_enabled = false
 	auto_speed_level = 0
 	total_manual_turns = 0
 	total_auto_turns = 0
@@ -47,120 +49,165 @@ func initialize() -> void:
 	last_settlement_base = 0
 	last_settlement_multiplier = 1.0
 	recent_income_window.clear()
-	pending_auto_cycle_dice.clear()
-	_reset_manual_turn()
+	dice_face_stats.reset()
+	_reset_all_tables()
 
 
-func _reset_manual_turn() -> void:
-	current_rolls_used = 0
-	current_dice_values = DiceLogic.create_default_dice(dice_count)
-	current_holds = DiceLogic.create_default_holds(dice_count)
+func _reset_all_tables() -> void:
+	table_dice_counts.clear()
+	table_rolls_used.clear()
+	table_dice_values.clear()
+	table_holds.clear()
+	per_table_auto_enabled.clear()
+	table_auto_staging.clear()
+	for _i in range(table_count):
+		table_dice_counts.append(MIN_DICE_COUNT)
+		table_rolls_used.append(0)
+		table_dice_values.append(DiceLogic.create_default_dice(MIN_DICE_COUNT))
+		table_holds.append(DiceLogic.create_default_holds(MIN_DICE_COUNT))
+		per_table_auto_enabled.append(false)
+		table_auto_staging.append([])
 
 
-func can_manual_roll() -> bool:
-	return current_rolls_used < MAX_ROLLS_PER_TURN
+func _ensure_table_index(table_index: int) -> bool:
+	return table_index >= 0 and table_index < table_count
 
 
-func can_settle_manual() -> bool:
-	return current_rolls_used > 0
+func get_table_dice_count(table_index: int) -> int:
+	if not _ensure_table_index(table_index):
+		return MIN_DICE_COUNT
+	return int(table_dice_counts[table_index])
 
 
-func toggle_hold(index: int) -> void:
-	if current_rolls_used <= 0:
+func can_manual_roll(table_index: int) -> bool:
+	if not _ensure_table_index(table_index):
+		return false
+	if auto_unlocked and bool(per_table_auto_enabled[table_index]):
+		return false
+	return int(table_rolls_used[table_index]) < MAX_ROLLS_PER_TURN
+
+
+func can_settle_manual(table_index: int) -> bool:
+	if not _ensure_table_index(table_index):
+		return false
+	if auto_unlocked and bool(per_table_auto_enabled[table_index]):
+		return false
+	return int(table_rolls_used[table_index]) > 0
+
+
+func toggle_hold(table_index: int, die_index: int) -> void:
+	if not _ensure_table_index(table_index):
 		return
-	current_holds = DiceLogic.toggle_hold(current_holds, index)
+	if int(table_rolls_used[table_index]) <= 0:
+		return
+	if auto_unlocked and bool(per_table_auto_enabled[table_index]):
+		return
+	var holds: Array = table_holds[table_index]
+	table_holds[table_index] = DiceLogic.toggle_hold(holds, die_index)
 
 
-func roll_manual() -> Dictionary:
-	if not can_manual_roll():
+func roll_manual(table_index: int) -> Dictionary:
+	if not can_manual_roll(table_index):
+		if auto_unlocked and bool(per_table_auto_enabled[table_index]):
+			return {"ok": false, "message": "该桌已开启自动，请先关闭本桌自动。"}
 		return {"ok": false, "message": "本回合重投次数已用完，请先结算。"}
-	current_dice_values = DiceLogic.roll_dice(current_dice_values, current_holds)
-	current_rolls_used += 1
+	var values: Array = table_dice_values[table_index]
+	var holds: Array = table_holds[table_index]
+	var next_values := DiceLogic.roll_dice(values, holds)
+	dice_face_stats.record_rerolled_only(holds, next_values)
+	table_dice_values[table_index] = next_values
+	table_rolls_used[table_index] = int(table_rolls_used[table_index]) + 1
 	return {"ok": true}
 
 
-func settle_manual_turn() -> Dictionary:
-	if not can_settle_manual():
+func settle_manual_turn(table_index: int) -> Dictionary:
+	if not can_settle_manual(table_index):
 		return {"ok": false, "message": "请至少掷骰一次后再结算。"}
-	var snapshot := _evaluate_income_for_dice(current_dice_values)
+	var dice := _clone_dice_row(table_dice_values[table_index], get_table_dice_count(table_index))
+	var snapshot := _evaluate_income_for_dice(dice)
 	var income := int(snapshot["income"])
-	var total_income := income
-	for _table_index in range(table_count - 1):
-		total_income += _simulate_background_table_income()
-	_add_coin(total_income)
+	_add_coin(income)
 	total_manual_turns += 1
 	last_settlement_label = String(snapshot["label"])
 	last_settlement_base = int(snapshot["base"])
 	last_settlement_multiplier = float(snapshot["multiplier"])
-	last_settlement_income = total_income
-	_record_income_event(total_income)
-	_reset_manual_turn()
+	last_settlement_income = income
+	_record_income_event(income)
+	_reset_table_turn(table_index)
 	return {
 		"ok": true,
-		"income": total_income,
-		"pattern_label": last_settlement_label
+		"income": income,
+		"pattern_label": last_settlement_label,
+		"table_index": table_index
 	}
 
 
-func run_auto_tick() -> Dictionary:
-	if not auto_unlocked or not auto_enabled:
-		return {"ok": false}
+func begin_auto_throw_for_table(table_index: int) -> Dictionary:
+	if not _ensure_table_index(table_index):
+		return {"ok": false, "message": "无效骰桌。"}
+	if not auto_unlocked or not bool(per_table_auto_enabled[table_index]):
+		return {"ok": false, "message": "该桌自动未开启。"}
+	var staging: Array = table_auto_staging[table_index]
+	if staging.size() > 0:
+		return {"ok": false, "message": "该桌已有待完成的自动投掷。"}
+	var dice := _build_auto_cycle_dice_for_table(table_index)
+	table_auto_staging[table_index] = dice
 	return {"ok": true}
 
 
-func begin_auto_throw_cycle() -> Dictionary:
-	if not auto_unlocked or not auto_enabled:
-		return {"ok": false, "message": "自动系统未启用。"}
-	pending_auto_cycle_dice = _build_auto_cycle_dice()
-	current_dice_values = pending_auto_cycle_dice.duplicate()
-	current_holds = DiceLogic.create_default_holds(dice_count)
-	current_rolls_used = 0
-	return {"ok": true}
-
-
-func finalize_auto_throw_cycle() -> Dictionary:
-	if pending_auto_cycle_dice.is_empty():
+func finalize_auto_throw_for_table(table_index: int) -> Dictionary:
+	if not _ensure_table_index(table_index):
+		return {"ok": false, "message": "无效骰桌。"}
+	var staging: Array = table_auto_staging[table_index]
+	if staging.is_empty():
 		return {"ok": false, "message": "没有待结算的自动投掷。"}
-	var snapshot := _evaluate_income_for_dice(pending_auto_cycle_dice)
-	var total_income := int(snapshot["income"])
-	for _table_index in range(table_count - 1):
-		total_income += _simulate_auto_table_income()
-	_add_coin(total_income)
-	total_auto_turns += table_count
-	last_settlement_label = "%s(自动)" % [String(snapshot["label"])]
+	var dice := _clone_dice_row(staging, get_table_dice_count(table_index))
+	var snapshot := _evaluate_income_for_dice(dice)
+	var income := int(snapshot["income"])
+	table_dice_values[table_index] = dice.duplicate()
+	table_auto_staging[table_index] = []
+	table_rolls_used[table_index] = 0
+	table_holds[table_index] = DiceLogic.create_default_holds(get_table_dice_count(table_index))
+	_add_coin(income)
+	total_auto_turns += 1
+	last_settlement_label = "%s(自动桌%d)" % [String(snapshot["label"]), table_index + 1]
 	last_settlement_base = int(snapshot["base"])
 	last_settlement_multiplier = float(snapshot["multiplier"])
-	last_settlement_income = total_income
-	_record_income_event(total_income)
-	pending_auto_cycle_dice.clear()
+	last_settlement_income = income
+	_record_income_event(income)
 	return {
 		"ok": true,
-		"income": total_income,
-		"turns": table_count,
-		"pattern_label": last_settlement_label
+		"income": income,
+		"pattern_label": last_settlement_label,
+		"table_index": table_index
 	}
 
 
-func get_dice_upgrade_cost() -> int:
-	if dice_count >= MAX_DICE_COUNT:
+func get_dice_upgrade_cost(table_index: int) -> int:
+	if not _ensure_table_index(table_index):
 		return -1
-	return int(35 * pow(1.75, dice_count - MIN_DICE_COUNT))
+	var dc := get_table_dice_count(table_index)
+	if dc >= MAX_DICE_COUNT:
+		return -1
+	return int(35 * pow(1.75, dc - MIN_DICE_COUNT))
 
 
-func can_upgrade_dice() -> bool:
-	var cost := get_dice_upgrade_cost()
+func can_upgrade_dice_on_table(table_index: int) -> bool:
+	var cost := get_dice_upgrade_cost(table_index)
 	return cost > 0 and coin_1 >= cost
 
 
-func upgrade_dice_count() -> Dictionary:
-	var cost := get_dice_upgrade_cost()
+func upgrade_dice_on_table(table_index: int) -> Dictionary:
+	var cost := get_dice_upgrade_cost(table_index)
+	if not _ensure_table_index(table_index):
+		return {"ok": false, "message": "无效骰桌。"}
 	if cost <= 0:
-		return {"ok": false, "message": "骰子数量已达上限。"}
+		return {"ok": false, "message": "该桌骰子数量已达上限。"}
 	if coin_1 < cost:
 		return {"ok": false, "message": "货币1不足。"}
 	coin_1 -= cost
-	dice_count += 1
-	_reset_manual_turn()
+	table_dice_counts[table_index] = int(table_dice_counts[table_index]) + 1
+	_reset_table_turn(table_index)
 	return {"ok": true}
 
 
@@ -183,6 +230,12 @@ func upgrade_table_count() -> Dictionary:
 		return {"ok": false, "message": "货币1不足。"}
 	coin_1 -= cost
 	table_count += 1
+	table_dice_counts.append(MIN_DICE_COUNT)
+	table_rolls_used.append(0)
+	table_dice_values.append(DiceLogic.create_default_dice(MIN_DICE_COUNT))
+	table_holds.append(DiceLogic.create_default_holds(MIN_DICE_COUNT))
+	per_table_auto_enabled.append(auto_unlocked)
+	table_auto_staging.append([])
 	return {"ok": true}
 
 
@@ -202,7 +255,8 @@ func unlock_auto() -> Dictionary:
 		return {"ok": false, "message": "货币1不足。"}
 	coin_1 -= cost
 	auto_unlocked = true
-	auto_enabled = true
+	for i in range(table_count):
+		per_table_auto_enabled[i] = true
 	return {"ok": true}
 
 
@@ -236,9 +290,27 @@ func get_auto_interval() -> float:
 	return maxf(MIN_AUTO_INTERVAL, BASE_AUTO_INTERVAL - AUTO_INTERVAL_STEP * float(auto_speed_level))
 
 
+func set_table_auto_enabled(table_index: int, enabled: bool) -> void:
+	if not _ensure_table_index(table_index):
+		return
+	if not auto_unlocked:
+		return
+	per_table_auto_enabled[table_index] = enabled
+
+
+func is_table_auto_enabled(table_index: int) -> bool:
+	if not _ensure_table_index(table_index):
+		return false
+	return auto_unlocked and bool(per_table_auto_enabled[table_index])
+
+
 func get_progress_multiplier() -> float:
-	var dice_factor := 1.0 + (float(dice_count - MIN_DICE_COUNT) * 0.16)
-	var table_factor := 1.0 + (float(table_count - MIN_TABLE_COUNT) * 0.10)
+	var sum_extra := 0
+	for i in range(table_count):
+		sum_extra += int(table_dice_counts[i]) - MIN_DICE_COUNT
+	var avg_extra := float(sum_extra) / float(maxi(1, table_count))
+	var dice_factor := 1.0 + avg_extra * 0.16
+	var table_factor := 1.0 + float(table_count - MIN_TABLE_COUNT) * 0.10
 	return dice_factor * table_factor
 
 
@@ -254,27 +326,37 @@ func estimate_income_per_second() -> float:
 	return total_income / delta_sec
 
 
-func _simulate_auto_table_income() -> int:
-	var dice := _build_auto_cycle_dice()
-	var snapshot := _evaluate_income_for_dice(dice)
-	return int(snapshot["income"])
+func _reset_table_turn(table_index: int) -> void:
+	if not _ensure_table_index(table_index):
+		return
+	var dc := get_table_dice_count(table_index)
+	table_rolls_used[table_index] = 0
+	table_dice_values[table_index] = DiceLogic.create_default_dice(dc)
+	table_holds[table_index] = DiceLogic.create_default_holds(dc)
+	table_auto_staging[table_index] = []
 
 
-func _build_auto_cycle_dice() -> Array[int]:
-	var dice := DiceLogic.roll_fresh_dice(dice_count)
-	# Auto keeps strong dice on rerolls to emulate simple strategy.
+func _build_auto_cycle_dice_for_table(table_index: int) -> Array[int]:
+	var dc := get_table_dice_count(table_index)
+	var dice := DiceLogic.roll_fresh_dice(dc)
+	dice_face_stats.record_all_faces(dice)
 	for _i in range(MAX_ROLLS_PER_TURN - 1):
 		var holds: Array[bool] = []
 		for value in dice:
 			holds.append(value >= 5)
 		dice = DiceLogic.roll_dice(dice, holds)
+		dice_face_stats.record_rerolled_only(holds, dice)
 	return dice
 
 
-func _simulate_background_table_income() -> int:
-	var dice := DiceLogic.roll_fresh_dice(dice_count)
-	var snapshot := _evaluate_income_for_dice(dice)
-	return int(snapshot["income"])
+func _clone_dice_row(source: Variant, expected_count: int) -> Array[int]:
+	var out: Array[int] = []
+	if source is Array:
+		for v in source:
+			out.append(clampi(int(v), DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
+	if out.size() != expected_count:
+		return DiceLogic.create_default_dice(expected_count)
+	return out
 
 
 func _evaluate_income_for_dice(dice: Array[int]) -> Dictionary:
@@ -308,15 +390,11 @@ func _record_income_event(amount: int) -> void:
 
 func to_save_data() -> Dictionary:
 	return {
+		"version": 2,
 		"coin_1": coin_1,
 		"total_coin_earned": total_coin_earned,
-		"current_rolls_used": current_rolls_used,
-		"current_dice_values": current_dice_values.duplicate(),
-		"current_holds": current_holds.duplicate(),
 		"table_count": table_count,
-		"dice_count": dice_count,
 		"auto_unlocked": auto_unlocked,
-		"auto_enabled": auto_enabled,
 		"auto_speed_level": auto_speed_level,
 		"total_manual_turns": total_manual_turns,
 		"total_auto_turns": total_auto_turns,
@@ -325,7 +403,12 @@ func to_save_data() -> Dictionary:
 		"last_settlement_base": last_settlement_base,
 		"last_settlement_multiplier": last_settlement_multiplier,
 		"recent_income_window": recent_income_window.duplicate(true),
-		"pending_auto_cycle_dice": pending_auto_cycle_dice.duplicate()
+		"table_dice_counts": _int_array_to_save(table_dice_counts),
+		"table_rolls_used": _int_array_to_save(table_rolls_used),
+		"table_dice_values": _nested_dice_to_save(table_dice_values),
+		"table_holds": _nested_holds_to_save(table_holds),
+		"per_table_auto_enabled": _bool_array_to_save(per_table_auto_enabled),
+		"table_auto_staging": _nested_dice_to_save(table_auto_staging)
 	}
 
 
@@ -335,11 +418,8 @@ func load_from_save_data(data: Dictionary) -> bool:
 
 	coin_1 = maxi(0, int(data.get("coin_1", 0)))
 	total_coin_earned = maxi(coin_1, int(data.get("total_coin_earned", coin_1)))
-	current_rolls_used = clampi(int(data.get("current_rolls_used", 0)), 0, MAX_ROLLS_PER_TURN)
-	dice_count = clampi(int(data.get("dice_count", MIN_DICE_COUNT)), MIN_DICE_COUNT, MAX_DICE_COUNT)
 	table_count = clampi(int(data.get("table_count", MIN_TABLE_COUNT)), MIN_TABLE_COUNT, MAX_TABLE_COUNT)
 	auto_unlocked = bool(data.get("auto_unlocked", false))
-	auto_enabled = bool(data.get("auto_enabled", false)) and auto_unlocked
 	auto_speed_level = maxi(0, int(data.get("auto_speed_level", 0)))
 	total_manual_turns = maxi(0, int(data.get("total_manual_turns", 0)))
 	total_auto_turns = maxi(0, int(data.get("total_auto_turns", 0)))
@@ -347,21 +427,6 @@ func load_from_save_data(data: Dictionary) -> bool:
 	last_settlement_income = maxi(0, int(data.get("last_settlement_income", 0)))
 	last_settlement_base = maxi(0, int(data.get("last_settlement_base", 0)))
 	last_settlement_multiplier = maxf(1.0, float(data.get("last_settlement_multiplier", 1.0)))
-
-	current_dice_values = []
-	var saved_dice: Array = data.get("current_dice_values", [])
-	for value in saved_dice:
-		current_dice_values.append(clampi(int(value), DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
-
-	current_holds = []
-	var saved_holds: Array = data.get("current_holds", [])
-	for value in saved_holds:
-		current_holds.append(bool(value))
-
-	if current_dice_values.size() != dice_count:
-		current_dice_values = DiceLogic.create_default_dice(dice_count)
-	if current_holds.size() != dice_count:
-		current_holds = DiceLogic.create_default_holds(dice_count)
 
 	recent_income_window = []
 	var saved_window: Array = data.get("recent_income_window", [])
@@ -374,11 +439,207 @@ func load_from_save_data(data: Dictionary) -> bool:
 	if recent_income_window.size() > 12:
 		recent_income_window = recent_income_window.slice(recent_income_window.size() - 12, recent_income_window.size())
 
-	pending_auto_cycle_dice = []
-	var saved_pending_dice: Array = data.get("pending_auto_cycle_dice", [])
-	for value in saved_pending_dice:
-		pending_auto_cycle_dice.append(clampi(int(value), DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
-	if pending_auto_cycle_dice.size() != dice_count:
-		pending_auto_cycle_dice.clear()
+	var ver := int(data.get("version", 1))
+	if ver >= 2:
+		_load_v2_tables(data)
+	else:
+		_migrate_v1_to_v2(data)
 
 	return true
+
+
+func _load_v2_tables(data: Dictionary) -> void:
+	table_dice_counts = _read_int_array(data.get("table_dice_counts", []), MIN_DICE_COUNT, MAX_DICE_COUNT, MIN_DICE_COUNT)
+	table_rolls_used = _read_int_array(data.get("table_rolls_used", []), 0, MAX_ROLLS_PER_TURN, 0)
+	_normalize_table_arrays()
+	table_dice_values = _read_nested_dice(data.get("table_dice_values", []))
+	table_holds = _read_nested_holds(data.get("table_holds", []))
+	per_table_auto_enabled = _read_bool_array(data.get("per_table_auto_enabled", []))
+	table_auto_staging = _read_nested_dice_allow_empty(data.get("table_auto_staging", []))
+	_clamp_all_table_rows()
+
+
+func _migrate_v1_to_v2(data: Dictionary) -> void:
+	var legacy_dice := clampi(int(data.get("dice_count", MIN_DICE_COUNT)), MIN_DICE_COUNT, MAX_DICE_COUNT)
+	var legacy_rolls := clampi(int(data.get("current_rolls_used", 0)), 0, MAX_ROLLS_PER_TURN)
+	var legacy_auto := bool(data.get("auto_enabled", false)) and auto_unlocked
+	var saved_dice: Array = data.get("current_dice_values", [])
+	var row0: Array[int] = []
+	for v in saved_dice:
+		row0.append(clampi(int(v), DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
+	if row0.size() != legacy_dice:
+		row0 = DiceLogic.create_default_dice(legacy_dice)
+	var saved_holds: Array = data.get("current_holds", [])
+	var holds0: Array[bool] = []
+	for v in saved_holds:
+		holds0.append(bool(v))
+	if holds0.size() != legacy_dice:
+		holds0 = DiceLogic.create_default_holds(legacy_dice)
+	table_dice_counts.clear()
+	table_rolls_used.clear()
+	table_dice_values.clear()
+	table_holds.clear()
+	per_table_auto_enabled.clear()
+	table_auto_staging.clear()
+	for i in range(table_count):
+		table_dice_counts.append(legacy_dice)
+		table_rolls_used.append(legacy_rolls if i == 0 else 0)
+		per_table_auto_enabled.append(legacy_auto)
+		table_auto_staging.append([])
+		if i == 0:
+			table_dice_values.append(row0)
+			table_holds.append(holds0)
+		else:
+			table_dice_values.append(DiceLogic.create_default_dice(legacy_dice))
+			table_holds.append(DiceLogic.create_default_holds(legacy_dice))
+	_clamp_all_table_rows()
+
+
+func _normalize_table_arrays() -> void:
+	while table_dice_counts.size() < table_count:
+		table_dice_counts.append(MIN_DICE_COUNT)
+	while table_dice_counts.size() > table_count:
+		table_dice_counts.pop_back()
+	while table_rolls_used.size() < table_count:
+		table_rolls_used.append(0)
+	while table_rolls_used.size() > table_count:
+		table_rolls_used.pop_back()
+	while per_table_auto_enabled.size() < table_count:
+		per_table_auto_enabled.append(false)
+	while per_table_auto_enabled.size() > table_count:
+		per_table_auto_enabled.pop_back()
+	while table_auto_staging.size() < table_count:
+		table_auto_staging.append([])
+	while table_auto_staging.size() > table_count:
+		table_auto_staging.pop_back()
+
+
+func _clamp_all_table_rows() -> void:
+	_normalize_table_arrays()
+	for i in range(table_count):
+		var dc := clampi(int(table_dice_counts[i]), MIN_DICE_COUNT, MAX_DICE_COUNT)
+		table_dice_counts[i] = dc
+		table_rolls_used[i] = clampi(int(table_rolls_used[i]), 0, MAX_ROLLS_PER_TURN)
+		table_dice_values[i] = _clone_dice_row(table_dice_values[i], dc)
+		table_holds[i] = _normalize_holds_row(table_holds[i], dc)
+		var st: Array = table_auto_staging[i]
+		if st.size() > 0:
+			if st.size() != dc:
+				table_auto_staging[i] = []
+			else:
+				table_auto_staging[i] = _clone_dice_row(st, dc)
+
+
+func _normalize_holds_row(holds: Variant, count: int) -> Array[bool]:
+	var out: Array[bool] = []
+	if holds is Array:
+		for v in holds:
+			out.append(bool(v))
+	while out.size() < count:
+		out.append(false)
+	if out.size() > count:
+		out = out.slice(0, count)
+	return out
+
+
+func _int_array_to_save(arr: Array) -> Array:
+	var out: Array = []
+	for v in arr:
+		out.append(int(v))
+	return out
+
+
+func _bool_array_to_save(arr: Array) -> Array:
+	var out: Array = []
+	for v in arr:
+		out.append(bool(v))
+	return out
+
+
+func _nested_dice_to_save(arr: Array) -> Array:
+	var out: Array = []
+	for row in arr:
+		var inner: Array = []
+		if row is Array:
+			for v in row:
+				inner.append(clampi(int(v), DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
+		out.append(inner)
+	return out
+
+
+func _nested_holds_to_save(arr: Array) -> Array:
+	var out: Array = []
+	for row in arr:
+		var inner: Array = []
+		if row is Array:
+			for v in row:
+				inner.append(bool(v))
+		out.append(inner)
+	return out
+
+
+func _read_int_array(raw: Variant, lo: int, hi: int, fill: int) -> Array:
+	var out: Array = []
+	if raw is Array:
+		for v in raw:
+			out.append(clampi(int(v), lo, hi))
+	while out.size() < table_count:
+		out.append(fill)
+	if out.size() > table_count:
+		out = out.slice(0, table_count)
+	return out
+
+
+func _read_bool_array(raw: Variant) -> Array:
+	var out: Array = []
+	if raw is Array:
+		for v in raw:
+			out.append(bool(v))
+	while out.size() < table_count:
+		out.append(false)
+	if out.size() > table_count:
+		out = out.slice(0, table_count)
+	return out
+
+
+func _read_nested_dice(raw: Variant) -> Array:
+	var out: Array = []
+	if raw is Array:
+		for row in raw:
+			var inner: Array[int] = []
+			if row is Array:
+				for v in row:
+					inner.append(clampi(int(v), DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
+			out.append(inner)
+	while out.size() < table_count:
+		out.append([])
+	if out.size() > table_count:
+		return out.slice(0, table_count)
+	return out
+
+
+func _read_nested_holds(raw: Variant) -> Array:
+	var out: Array = []
+	if raw is Array:
+		for row in raw:
+			var inner: Array[bool] = []
+			if row is Array:
+				for v in row:
+					inner.append(bool(v))
+			out.append(inner)
+	while out.size() < table_count:
+		out.append([])
+	if out.size() > table_count:
+		return out.slice(0, table_count)
+	return out
+
+
+func _read_nested_dice_allow_empty(raw: Variant) -> Array:
+	var out: Array = _read_nested_dice(raw)
+	for i in range(out.size()):
+		var row: Array = out[i]
+		if row.size() == 0:
+			continue
+		var dc := get_table_dice_count(i)
+		out[i] = _clone_dice_row(row, dc)
+	return out
