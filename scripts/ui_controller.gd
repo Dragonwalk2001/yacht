@@ -18,6 +18,11 @@ var dice_stats_dialog: AcceptDialog
 var growth_window: Window
 var growth_coin_label: Label
 var growth_node_panels: Dictionary = {}
+var growth_tree_scroll: ScrollContainer
+var growth_tree_stage: Control
+var growth_tree_root: VBoxContainer
+var growth_tree_link_layer: Control
+var growth_tree_node_prereqs: Dictionary = {}
 var growth_detail_richtext: RichTextLabel
 var growth_node_detail_text: Dictionary = {}
 var growth_hovered_node_id: String = ""
@@ -197,6 +202,7 @@ func _init_dice_stats_dialog() -> void:
 
 func _init_growth_window() -> void:
 	growth_node_panels.clear()
+	growth_tree_node_prereqs.clear()
 	growth_window = Window.new()
 	growth_window.title = "成长与解锁 · 科技树"
 	growth_window.size = Vector2i(700, 480)
@@ -226,20 +232,56 @@ func _init_growth_window() -> void:
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_theme_constant_override("separation", 12)
 	outer.add_child(body)
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size.x = 148
-	scroll.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	body.add_child(scroll)
-	var tree_root := VBoxContainer.new()
-	tree_root.add_theme_constant_override("separation", 4)
-	tree_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tree_root.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	scroll.add_child(tree_root)
+	var tree_panel := PanelContainer.new()
+	tree_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tree_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tree_panel.size_flags_stretch_ratio = 7.0
+	var tree_style := _growth_tree_node_stylebox()
+	tree_style.bg_color = Color(0.08, 0.09, 0.11, 1.0)
+	tree_panel.add_theme_stylebox_override("panel", tree_style)
+	body.add_child(tree_panel)
+	var tree_margin := MarginContainer.new()
+	tree_margin.add_theme_constant_override("margin_left", 10)
+	tree_margin.add_theme_constant_override("margin_top", 10)
+	tree_margin.add_theme_constant_override("margin_right", 10)
+	tree_margin.add_theme_constant_override("margin_bottom", 10)
+	tree_panel.add_child(tree_margin)
+	growth_tree_scroll = ScrollContainer.new()
+	growth_tree_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	growth_tree_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	growth_tree_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	tree_margin.add_child(growth_tree_scroll)
+	growth_tree_stage = Control.new()
+	growth_tree_stage.custom_minimum_size = Vector2(480, 260)
+	growth_tree_stage.size = Vector2(480, 260)
+	growth_tree_scroll.add_child(growth_tree_stage)
+	growth_tree_link_layer = Control.new()
+	growth_tree_link_layer.position = Vector2.ZERO
+	growth_tree_link_layer.size = growth_tree_stage.size
+	growth_tree_link_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	growth_tree_stage.add_child(growth_tree_link_layer)
+	growth_tree_root = VBoxContainer.new()
+	growth_tree_root.position = Vector2.ZERO
+	growth_tree_root.add_theme_constant_override("separation", 6)
+	growth_tree_stage.add_child(growth_tree_root)
+	growth_tree_root.resized.connect(func() -> void:
+		call_deferred("_update_growth_tree_canvas_size")
+		call_deferred("_refresh_growth_tree_links")
+	)
+	var vbar := growth_tree_scroll.get_v_scroll_bar()
+	if vbar != null:
+		vbar.value_changed.connect(func(_v: float) -> void:
+			call_deferred("_refresh_growth_tree_links")
+		)
+	var hbar := growth_tree_scroll.get_h_scroll_bar()
+	if hbar != null:
+		hbar.value_changed.connect(func(_v: float) -> void:
+			call_deferred("_refresh_growth_tree_links")
+		)
 	var detail_panel := PanelContainer.new()
 	detail_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	detail_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail_panel.size_flags_stretch_ratio = 3.0
 	var detail_style := _growth_tree_node_stylebox()
 	detail_style.bg_color = Color(0.09, 0.1, 0.12, 1.0)
 	detail_panel.add_theme_stylebox_override("panel", detail_style)
@@ -263,35 +305,13 @@ func _init_growth_window() -> void:
 	growth_detail_richtext.scroll_active = true
 	growth_detail_richtext.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	growth_detail_richtext.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	growth_detail_richtext.custom_minimum_size = Vector2(280, 160)
+	growth_detail_richtext.custom_minimum_size = Vector2(240, 160)
 	growth_detail_richtext.text = GROWTH_DETAIL_PLACEHOLDER
 	detail_col.add_child(growth_detail_richtext)
-	upgrade_buttons = {}
-	upgrade_buttons["table"] = _create_tech_tree_node(tree_root, "table", _on_upgrade_table_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["auto_unlock"] = _create_tech_tree_node(tree_root, "auto_unlock", _on_upgrade_auto_unlock_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["auto_speed"] = _create_tech_tree_node(tree_root, "auto_speed", _on_upgrade_auto_speed_pressed)
-	_add_tech_tree_link(tree_root)
-	var exp_hdr := Label.new()
-	exp_hdr.text = "远征科技（货币1）"
-	exp_hdr.add_theme_font_size_override("font_size", 12)
-	tree_root.add_child(exp_hdr)
-	upgrade_buttons["expedition_unlock"] = _create_tech_tree_node(tree_root, "expedition_unlock", _on_tech_expedition_unlock_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["expedition_delete"] = _create_tech_tree_node(tree_root, "expedition_delete", _on_tech_delete_expedition_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["expedition_synth"] = _create_tech_tree_node(tree_root, "expedition_synth", _on_tech_synth_expedition_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["dice_cap_tech"] = _create_tech_tree_node(tree_root, "dice_cap_tech", _on_tech_dice_cap_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["exp_acquire_n"] = _create_tech_tree_node(tree_root, "exp_acquire_n", _on_tech_acquire_n_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["exp_delete_n"] = _create_tech_tree_node(tree_root, "exp_delete_n", _on_tech_delete_n_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["exp_synth_n"] = _create_tech_tree_node(tree_root, "exp_synth_n", _on_tech_synth_n_pressed)
-	_add_tech_tree_link(tree_root)
-	upgrade_buttons["exp_duration"] = _create_tech_tree_node(tree_root, "exp_duration", _on_tech_exp_duration_pressed)
+	_build_growth_tree_nodes()
+	growth_window.size_changed.connect(func() -> void:
+		call_deferred("_refresh_growth_tree_links")
+	)
 	growth_window.size = Vector2i(760, 560)
 	growth_window.min_size = Vector2i(620, 480)
 	add_child(growth_window)
@@ -434,10 +454,12 @@ func _growth_tree_node_stylebox_compact() -> StyleBoxFlat:
 	return sb
 
 
-func _create_tech_tree_node(parent: VBoxContainer, node_id: String, callback: Callable) -> Button:
+func _create_tech_tree_node(parent: Node, node_id: String, callback: Callable) -> Button:
 	var panel := PanelContainer.new()
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.custom_minimum_size.x = 132
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	panel.custom_minimum_size = Vector2(40, 40)
+	panel.position = Vector2.ZERO
+	panel.size = Vector2(40, 40)
 	panel.add_theme_stylebox_override("panel", _growth_tree_node_stylebox_compact())
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel.mouse_entered.connect(_on_growth_node_hover.bind(node_id))
@@ -446,9 +468,9 @@ func _create_tech_tree_node(parent: VBoxContainer, node_id: String, callback: Ca
 	var button := Button.new()
 	button.clip_text = true
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	button.custom_minimum_size = Vector2(0, 24)
-	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	button.add_theme_font_size_override("font_size", 12)
+	button.custom_minimum_size = Vector2(36, 36)
+	button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	button.add_theme_font_size_override("font_size", 10)
 	button.pressed.connect(callback)
 	button.mouse_entered.connect(_on_growth_node_hover.bind(node_id))
 	button.tooltip_text = ""
@@ -457,15 +479,358 @@ func _create_tech_tree_node(parent: VBoxContainer, node_id: String, callback: Ca
 	return button
 
 
-func _add_tech_tree_link(parent: VBoxContainer) -> void:
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.custom_minimum_size.y = 10
-	var line := ColorRect.new()
-	line.custom_minimum_size = Vector2(2, 8)
-	line.color = Color(0.38, 0.41, 0.46, 1.0)
-	row.add_child(line)
-	parent.add_child(row)
+func _build_growth_tree_nodes() -> void:
+	upgrade_buttons = {}
+	growth_node_panels.clear()
+	growth_tree_node_prereqs.clear()
+	if growth_tree_root == null:
+		return
+	for child in growth_tree_root.get_children():
+		child.queue_free()
+	var defs: Array = _growth_tree_node_defs()
+	var defs_by_id: Dictionary = {}
+	var section_order: Array[String] = []
+	var section_defs: Dictionary = {}
+	for d in defs:
+		if d is Dictionary and d.has("id"):
+			var dd := d as Dictionary
+			var node_id := String(dd.get("id", ""))
+			var section := String(dd.get("section", ""))
+			defs_by_id[node_id] = dd
+			if not section_defs.has(section):
+				section_defs[section] = []
+				section_order.append(section)
+			(section_defs[section] as Array).append(dd)
+	var depth_cache: Dictionary = {}
+	for section in section_order:
+		var section_label := Label.new()
+		section_label.text = section
+		section_label.add_theme_font_size_override("font_size", 12)
+		growth_tree_root.add_child(section_label)
+		var section_box := VBoxContainer.new()
+		section_box.add_theme_constant_override("separation", 18)
+		growth_tree_root.add_child(section_box)
+		var nodes_in_section: Array = section_defs.get(section, [])
+		var section_node_ids: Array[String] = []
+		var section_def_by_id: Dictionary = {}
+		for node_variant in nodes_in_section:
+			if not (node_variant is Dictionary):
+				continue
+			var node_def := node_variant as Dictionary
+			var node_id := String(node_def.get("id", ""))
+			if node_id == "":
+				continue
+			section_node_ids.append(node_id)
+			section_def_by_id[node_id] = node_def
+		var section_children := _build_growth_tree_section_children(section_node_ids, section_def_by_id)
+		var section_x_slots := _build_growth_tree_section_x_slots(section_node_ids, section_children, section_def_by_id)
+		var section_max_slot := 0
+		for slot in section_x_slots.values():
+			section_max_slot = maxi(section_max_slot, int(slot))
+		var rows_by_depth: Dictionary = {}
+		var max_depth := 0
+		for node_variant in nodes_in_section:
+			if not (node_variant is Dictionary):
+				continue
+			var node_def := node_variant as Dictionary
+			var node_id := String(node_def.get("id", ""))
+			if node_id == "":
+				continue
+			var reqs: Array = []
+			var req_variant: Variant = node_def.get("requires", [])
+			if req_variant is Array:
+				reqs = (req_variant as Array).duplicate()
+			growth_tree_node_prereqs[node_id] = reqs
+			var depth := _resolve_growth_node_depth(node_id, defs_by_id, depth_cache, {})
+			max_depth = maxi(max_depth, depth)
+			if not rows_by_depth.has(depth):
+				var row := _create_growth_tree_row_layer(section_max_slot + 64)
+				rows_by_depth[depth] = row
+			var target_row := rows_by_depth[depth] as Control
+			var slot_x := int(section_x_slots.get(node_id, 0))
+			target_row.add_child(_create_growth_tree_node_holder(node_id, slot_x, node_def))
+		for depth_idx in range(max_depth + 1):
+			if rows_by_depth.has(depth_idx):
+				section_box.add_child(rows_by_depth[depth_idx] as Control)
+	call_deferred("_update_growth_tree_canvas_size")
+	call_deferred("_refresh_growth_tree_links")
+
+
+func _create_growth_tree_row_layer(width_px: int) -> Control:
+	var row := Control.new()
+	row.custom_minimum_size = Vector2(maxi(200, width_px), 58)
+	row.size = row.custom_minimum_size
+	return row
+
+
+func _create_growth_tree_node_holder(node_id: String, slot_x: int, node_def: Dictionary) -> Control:
+	var holder := Control.new()
+	holder.position = Vector2(slot_x, 0)
+	holder.custom_minimum_size = Vector2(40, 40)
+	holder.size = holder.custom_minimum_size
+	var callback_name := String(node_def.get("callback", ""))
+	var callback := Callable()
+	if callback_name != "":
+		callback = Callable(self, callback_name)
+	var btn := _create_tech_tree_node(holder, node_id, callback)
+	btn.custom_minimum_size = Vector2(36, 36)
+	upgrade_buttons[node_id] = btn
+	return holder
+
+
+func _build_growth_tree_section_children(section_node_ids: Array[String], section_def_by_id: Dictionary) -> Dictionary:
+	var in_section := {}
+	for node_id in section_node_ids:
+		in_section[node_id] = true
+	var children: Dictionary = {}
+	for node_id in section_node_ids:
+		children[node_id] = []
+	for node_id in section_node_ids:
+		var node_def := section_def_by_id.get(node_id, {}) as Dictionary
+		var req_variant: Variant = node_def.get("requires", [])
+		if req_variant is Array:
+			for req in req_variant:
+				var req_id := String(req)
+				if in_section.has(req_id):
+					(children[req_id] as Array).append(node_id)
+	return children
+
+
+func _build_growth_tree_section_x_slots(section_node_ids: Array[String], children: Dictionary, section_def_by_id: Dictionary) -> Dictionary:
+	var x_cache: Dictionary = {}
+	var leaf_state := {"next": 0.0}
+	var indegree: Dictionary = {}
+	for node_id in section_node_ids:
+		indegree[node_id] = 0
+	for node_id in section_node_ids:
+		var node_def := section_def_by_id.get(node_id, {}) as Dictionary
+		var req_variant: Variant = node_def.get("requires", [])
+		if req_variant is Array:
+			for req in req_variant:
+				var req_id := String(req)
+				if indegree.has(node_id) and indegree.has(req_id):
+					indegree[node_id] = int(indegree[node_id]) + 1
+	var roots: Array[String] = []
+	for node_id in section_node_ids:
+		if int(indegree.get(node_id, 0)) == 0:
+			roots.append(node_id)
+	roots.sort()
+	for root_id in roots:
+		_compute_growth_tree_x_slot(root_id, children, x_cache, leaf_state, {})
+	var sorted_all := section_node_ids.duplicate()
+	sorted_all.sort()
+	for node_id in sorted_all:
+		if not x_cache.has(node_id):
+			_compute_growth_tree_x_slot(node_id, children, x_cache, leaf_state, {})
+	var pixel_slots: Dictionary = {}
+	var slot_step := 58.0
+	for node_id in section_node_ids:
+		var unit_x := float(x_cache.get(node_id, 0.0))
+		pixel_slots[node_id] = int(round(unit_x * slot_step))
+	return pixel_slots
+
+
+func _compute_growth_tree_x_slot(node_id: String, children: Dictionary, x_cache: Dictionary, leaf_state: Dictionary, visiting: Dictionary) -> float:
+	if x_cache.has(node_id):
+		return float(x_cache[node_id])
+	if visiting.has(node_id):
+		return float(leaf_state.get("next", 0.0))
+	visiting[node_id] = true
+	var child_ids := children.get(node_id, []) as Array
+	var x_value := 0.0
+	if child_ids.is_empty():
+		x_value = float(leaf_state.get("next", 0.0))
+		leaf_state["next"] = x_value + 1.0
+	else:
+		var sorted_children: Array[String] = []
+		for cid in child_ids:
+			sorted_children.append(String(cid))
+		sorted_children.sort()
+		var sum := 0.0
+		for child_id in sorted_children:
+			sum += _compute_growth_tree_x_slot(child_id, children, x_cache, leaf_state, visiting)
+		x_value = sum / float(sorted_children.size())
+	x_cache[node_id] = x_value
+	visiting.erase(node_id)
+	return x_value
+
+
+func _update_growth_tree_canvas_size() -> void:
+	if growth_tree_stage == null or growth_tree_root == null or growth_tree_link_layer == null:
+		return
+	var min_size: Vector2 = growth_tree_root.get_combined_minimum_size()
+	min_size.x = maxf(min_size.x + 120.0, 480.0)
+	min_size.y = maxf(min_size.y + 24.0, 260.0)
+	growth_tree_stage.custom_minimum_size = min_size
+	growth_tree_stage.size = min_size
+	growth_tree_link_layer.size = min_size
+
+
+func _growth_tree_node_defs() -> Array:
+	return [
+		{
+			"id": "table",
+			"section": "基础成长",
+			"requires": [],
+			"callback": "_on_upgrade_table_pressed"
+		},
+		{
+			"id": "auto_unlock",
+			"section": "基础成长",
+			"requires": [],
+			"callback": "_on_upgrade_auto_unlock_pressed"
+		},
+		{
+			"id": "auto_speed",
+			"section": "基础成长",
+			"requires": ["auto_unlock"],
+			"callback": "_on_upgrade_auto_speed_pressed"
+		},
+		{
+			"id": "expedition_unlock",
+			"section": "远征科技（货币1）",
+			"requires": [],
+			"callback": "_on_tech_expedition_unlock_pressed"
+		},
+		{
+			"id": "expedition_delete",
+			"section": "远征科技（货币1）",
+			"requires": ["expedition_unlock"],
+			"callback": "_on_tech_delete_expedition_pressed"
+		},
+		{
+			"id": "expedition_synth",
+			"section": "远征科技（货币1）",
+			"requires": ["expedition_delete"],
+			"callback": "_on_tech_synth_expedition_pressed"
+		},
+		{
+			"id": "dice_cap_tech",
+			"section": "远征科技（货币1）",
+			"requires": ["expedition_unlock"],
+			"callback": "_on_tech_dice_cap_pressed"
+		},
+		{
+			"id": "exp_acquire_n",
+			"section": "远征科技（货币1）",
+			"requires": ["expedition_unlock"],
+			"callback": "_on_tech_acquire_n_pressed"
+		},
+		{
+			"id": "exp_delete_n",
+			"section": "远征科技（货币1）",
+			"requires": ["expedition_delete"],
+			"callback": "_on_tech_delete_n_pressed"
+		},
+		{
+			"id": "exp_synth_n",
+			"section": "远征科技（货币1）",
+			"requires": ["expedition_synth"],
+			"callback": "_on_tech_synth_n_pressed"
+		},
+		{
+			"id": "exp_duration",
+			"section": "远征科技（货币1）",
+			"requires": ["expedition_unlock"],
+			"callback": "_on_tech_exp_duration_pressed"
+		}
+	]
+
+
+func _resolve_growth_node_depth(node_id: String, defs_by_id: Dictionary, cache: Dictionary, visiting: Dictionary) -> int:
+	if cache.has(node_id):
+		return int(cache[node_id])
+	if visiting.has(node_id):
+		return 0
+	visiting[node_id] = true
+	var depth := 0
+	var d_variant: Variant = defs_by_id.get(node_id, {})
+	if d_variant is Dictionary:
+		var req_variant: Variant = (d_variant as Dictionary).get("requires", [])
+		if req_variant is Array:
+			for req in req_variant:
+				var req_id := String(req)
+				if defs_by_id.has(req_id):
+					depth = maxi(depth, _resolve_growth_node_depth(req_id, defs_by_id, cache, visiting) + 1)
+	cache[node_id] = depth
+	visiting.erase(node_id)
+	return depth
+
+
+func _refresh_growth_tree_links() -> void:
+	if growth_tree_link_layer == null:
+		return
+	for child in growth_tree_link_layer.get_children():
+		child.queue_free()
+	for to_node_id in growth_tree_node_prereqs.keys():
+		var to_panel := growth_node_panels.get(to_node_id, null) as Control
+		if to_panel == null:
+			continue
+		var reqs: Array = growth_tree_node_prereqs.get(to_node_id, [])
+		for from_node in reqs:
+			var from_node_id := String(from_node)
+			var from_panel := growth_node_panels.get(from_node_id, null) as Control
+			if from_panel == null:
+				continue
+			_draw_growth_link(from_panel, to_panel)
+
+
+func _rect_edge_midpoints(rect: Rect2) -> Array[Vector2]:
+	return [
+		Vector2(rect.position.x + rect.size.x * 0.5, rect.position.y),
+		Vector2(rect.position.x + rect.size.x, rect.position.y + rect.size.y * 0.5),
+		Vector2(rect.position.x + rect.size.x * 0.5, rect.position.y + rect.size.y),
+		Vector2(rect.position.x, rect.position.y + rect.size.y * 0.5)
+	]
+
+
+func _draw_growth_link(from_panel: Control, to_panel: Control) -> void:
+	var from_rect := from_panel.get_global_rect()
+	var to_rect := to_panel.get_global_rect()
+	var layer_origin: Vector2 = growth_tree_link_layer.global_position
+	var start_global := Vector2(from_rect.position.x + from_rect.size.x * 0.5, from_rect.position.y + from_rect.size.y)
+	var end_global := Vector2(to_rect.position.x + to_rect.size.x * 0.5, to_rect.position.y)
+	var start: Vector2 = start_global - layer_origin
+	var tip: Vector2 = end_global - layer_origin
+	if start.distance_squared_to(tip) < 1.0:
+		return
+	var body := Line2D.new()
+	body.default_color = Color(0.42, 0.72, 0.94, 0.92)
+	body.width = 2.0
+	body.joint_mode = Line2D.LINE_JOINT_ROUND
+	body.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	body.end_cap_mode = Line2D.LINE_CAP_ROUND
+	body.antialiased = true
+	body.add_point(start)
+	body.add_point(tip)
+	growth_tree_link_layer.add_child(body)
+	var dir := (tip - start).normalized()
+	var normal := Vector2(-dir.y, dir.x)
+	var arrow_len := 8.0
+	var arrow_half_width := 4.0
+	var base := tip - dir * arrow_len
+	var left_pt := base + normal * arrow_half_width
+	var right_pt := base - normal * arrow_half_width
+	var head_left := Line2D.new()
+	head_left.default_color = Color(0.42, 0.72, 0.94, 0.92)
+	head_left.width = 2.0
+	head_left.joint_mode = Line2D.LINE_JOINT_ROUND
+	head_left.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	head_left.end_cap_mode = Line2D.LINE_CAP_ROUND
+	head_left.antialiased = true
+	head_left.add_point(tip)
+	head_left.add_point(left_pt)
+	growth_tree_link_layer.add_child(head_left)
+	var head_right := Line2D.new()
+	head_right.default_color = Color(0.42, 0.72, 0.94, 0.92)
+	head_right.width = 2.0
+	head_right.joint_mode = Line2D.LINE_JOINT_ROUND
+	head_right.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	head_right.end_cap_mode = Line2D.LINE_CAP_ROUND
+	head_right.antialiased = true
+	head_right.add_point(tip)
+	head_right.add_point(right_pt)
+	growth_tree_link_layer.add_child(head_right)
 
 
 func _on_growth_node_hover(node_id: String) -> void:
@@ -683,75 +1048,75 @@ func _refresh_growth_tree() -> void:
 	var auto_speed_cost := game_state.get_auto_speed_upgrade_cost()
 
 	var table_btn := upgrade_buttons.get("table") as Button
-	table_btn.text = "骰桌·满" if table_cost < 0 else "骰桌"
+	table_btn.text = "桌满" if table_cost < 0 else "骰桌"
 	table_btn.disabled = table_cost < 0 or game_state.coin_1 < table_cost
 
 	var auto_unlock_btn := upgrade_buttons.get("auto_unlock") as Button
 	if game_state.auto_unlocked:
-		auto_unlock_btn.text = "自动·开"
+		auto_unlock_btn.text = "自动开"
 		auto_unlock_btn.disabled = true
 	else:
 		auto_unlock_btn.text = "自动"
 		auto_unlock_btn.disabled = game_state.coin_1 < auto_unlock_cost
 
 	var auto_speed_btn := upgrade_buttons.get("auto_speed") as Button
-	auto_speed_btn.text = "间隔·满" if auto_speed_cost < 0 else "间隔"
+	auto_speed_btn.text = "速满" if auto_speed_cost < 0 else "间隔"
 	auto_speed_btn.disabled = auto_speed_cost < 0 or game_state.coin_1 < auto_speed_cost
 
 	var exu := upgrade_buttons.get("expedition_unlock") as Button
 	if game_state.tech_expedition_portal_unlocked:
-		exu.text = "远征入口·已开"
+		exu.text = "入口开"
 		exu.disabled = true
 	else:
-		exu.text = "远征入口"
+		exu.text = "入口"
 		exu.disabled = game_state.coin_1 < GameState.TECH_COST_EXPEDITION_ENTRY
 
 	var exd := upgrade_buttons.get("expedition_delete") as Button
 	if game_state.tech_delete_expedition_unlocked:
-		exd.text = "删骰远征·已开"
+		exd.text = "删骰开"
 		exd.disabled = true
 	else:
-		exd.text = "删骰远征"
+		exd.text = "删骰"
 		exd.disabled = (not game_state.tech_expedition_portal_unlocked) or game_state.coin_1 < GameState.TECH_COST_DELETE_EXPEDITION
 
 	var exs := upgrade_buttons.get("expedition_synth") as Button
 	if game_state.tech_synth_expedition_unlocked:
-		exs.text = "合成远征·已开"
+		exs.text = "合成开"
 		exs.disabled = true
 	else:
-		exs.text = "合成远征"
+		exs.text = "合成"
 		exs.disabled = (not game_state.tech_delete_expedition_unlocked) or game_state.coin_1 < GameState.TECH_COST_SYNTH_EXPEDITION
 
 	var dcap := upgrade_buttons.get("dice_cap_tech") as Button
 	var dcc := game_state.get_dice_cap_tech_cost_for_next_level()
 	if game_state.tech_dice_cap_level >= 2:
-		dcap.text = "骰子上限·满"
+		dcap.text = "上限满"
 		dcap.disabled = true
 	elif game_state.tech_dice_cap_level == 1:
-		dcap.text = "骰子上限→7"
+		dcap.text = "上限7"
 		dcap.disabled = game_state.coin_1 < dcc
 	else:
-		dcap.text = "骰子上限→6"
+		dcap.text = "上限6"
 		dcap.disabled = game_state.coin_1 < dcc
 
 	var an := upgrade_buttons.get("exp_acquire_n") as Button
 	var ac := game_state.get_acquire_n_upgrade_cost()
-	an.text = "得骰N+1" if ac >= 0 else "得骰N·满"
+	an.text = "得N+1" if ac >= 0 else "得N满"
 	an.disabled = ac < 0 or game_state.coin_1 < ac
 
 	var dn := upgrade_buttons.get("exp_delete_n") as Button
 	var del_n_cost := game_state.get_delete_n_upgrade_cost()
-	dn.text = "删骰N+1" if del_n_cost >= 0 else "删骰N·满"
+	dn.text = "删N+1" if del_n_cost >= 0 else "删N满"
 	dn.disabled = del_n_cost < 0 or game_state.coin_1 < del_n_cost
 
 	var sn := upgrade_buttons.get("exp_synth_n") as Button
 	var sc := game_state.get_synth_n_upgrade_cost()
-	sn.text = "合成池N+1" if sc >= 0 else "合成池N·满"
+	sn.text = "合N+1" if sc >= 0 else "合N满"
 	sn.disabled = sc < 0 or game_state.coin_1 < sc
 
 	var du := upgrade_buttons.get("exp_duration") as Button
 	var duc := game_state.get_duration_upgrade_cost()
-	du.text = "远征耗时-" if duc >= 0 else "远征耗时·满"
+	du.text = "耗时-" if duc >= 0 else "耗时满"
 	du.disabled = duc < 0 or game_state.coin_1 < duc
 
 	for t in range(GameState.MAX_TABLE_COUNT):
@@ -764,6 +1129,7 @@ func _refresh_growth_tree() -> void:
 		btn.text = "桌%d 骰子+1  花费:%s" % [t + 1, "MAX" if cost < 0 else str(cost)]
 
 	_refresh_growth_detail_cache()
+	call_deferred("_refresh_growth_tree_links")
 
 
 func _refresh_growth_detail_cache() -> void:
@@ -888,6 +1254,7 @@ func _on_growth_button_pressed() -> void:
 		growth_detail_richtext.text = GROWTH_DETAIL_PLACEHOLDER
 	_refresh_growth_tree()
 	growth_window.popup_centered()
+	call_deferred("_refresh_growth_tree_links")
 
 
 func _update_all_table_buttons() -> void:
