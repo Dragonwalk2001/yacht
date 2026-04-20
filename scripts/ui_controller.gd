@@ -2,6 +2,7 @@ class_name UIController
 extends Control
 
 const _TimeSpeedSettings := preload("res://scripts/time_speed_settings.gd")
+const _Die := preload("res://scripts/die_definition.gd")
 
 @onready var status_label: Label = $Margin/VBox/TopRow/LeftColumn/StatusLabel
 @onready var turn_label: Label = $Margin/VBox/TopRow/LeftColumn/TurnLabel
@@ -35,12 +36,33 @@ var table_roll_buttons: Array[Button] = []
 var table_settle_buttons: Array[Button] = []
 var table_auto_buttons: Array[Button] = []
 var table_dice_upgrade_buttons: Array[Button] = []
+var table_expedition_buttons: Array[Button] = []
+var table_expedition_timers: Array[Timer] = []
 var table_throw_timers: Array[Timer] = []
 var table_auto_timers: Array[Timer] = []
 var table_is_throwing: Array[bool] = []
 var table_throw_sources: Array[String] = []
 var table_throw_visuals: Array = []
 var table_queued_auto: Array[int] = []
+
+var expedition_window: Window
+var expedition_table_index: int = -1
+var expedition_type_option: OptionButton
+var expedition_item_list: ItemList
+var expedition_hint_label: Label
+var expedition_income_label: Label
+var expedition_start_button: Button
+var expedition_close_button: Button
+var expedition_income_before: float = 0.0
+var expedition_acquire_candidates: Array = []
+var expedition_delete_indices: Array[int] = []
+var expedition_synth_indices: Array[int] = []
+var expedition_pending_kind: int = -1
+var expedition_waiting_result_choice: bool = false
+var expedition_pending_acquire_idx: int = -1
+var expedition_pending_delete_die_idx: int = -1
+var expedition_pending_synth_lo: int = -1
+var expedition_pending_synth_hi: int = -1
 
 const SAVE_PATH := "user://savegame.json"
 
@@ -65,6 +87,7 @@ func _ready() -> void:
 	_TimeSpeedSettings.apply_engine_multiplier(time_speed)
 	_init_dice_stats_dialog()
 	_init_growth_window()
+	_init_expedition_window()
 	_init_time_speed_window()
 	_init_throw_tracking_arrays()
 	_create_per_table_timers()
@@ -153,6 +176,14 @@ func _create_per_table_timers() -> void:
 		)
 		add_child(at)
 		table_auto_timers.append(at)
+		var et := Timer.new()
+		et.one_shot = true
+		var exp_idx := i
+		et.timeout.connect(func() -> void:
+			_on_table_expedition_timer_timeout(exp_idx)
+		)
+		add_child(et)
+		table_expedition_timers.append(et)
 
 
 func _init_dice_stats_dialog() -> void:
@@ -241,7 +272,92 @@ func _init_growth_window() -> void:
 	upgrade_buttons["auto_unlock"] = _create_tech_tree_node(tree_root, "auto_unlock", _on_upgrade_auto_unlock_pressed)
 	_add_tech_tree_link(tree_root)
 	upgrade_buttons["auto_speed"] = _create_tech_tree_node(tree_root, "auto_speed", _on_upgrade_auto_speed_pressed)
+	_add_tech_tree_link(tree_root)
+	var exp_hdr := Label.new()
+	exp_hdr.text = "远征科技（货币1）"
+	exp_hdr.add_theme_font_size_override("font_size", 12)
+	tree_root.add_child(exp_hdr)
+	upgrade_buttons["expedition_unlock"] = _create_tech_tree_node(tree_root, "expedition_unlock", _on_tech_expedition_unlock_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["expedition_delete"] = _create_tech_tree_node(tree_root, "expedition_delete", _on_tech_delete_expedition_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["expedition_synth"] = _create_tech_tree_node(tree_root, "expedition_synth", _on_tech_synth_expedition_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["dice_cap_tech"] = _create_tech_tree_node(tree_root, "dice_cap_tech", _on_tech_dice_cap_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["exp_acquire_n"] = _create_tech_tree_node(tree_root, "exp_acquire_n", _on_tech_acquire_n_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["exp_delete_n"] = _create_tech_tree_node(tree_root, "exp_delete_n", _on_tech_delete_n_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["exp_synth_n"] = _create_tech_tree_node(tree_root, "exp_synth_n", _on_tech_synth_n_pressed)
+	_add_tech_tree_link(tree_root)
+	upgrade_buttons["exp_duration"] = _create_tech_tree_node(tree_root, "exp_duration", _on_tech_exp_duration_pressed)
+	growth_window.size = Vector2i(760, 560)
+	growth_window.min_size = Vector2i(620, 480)
 	add_child(growth_window)
+
+
+func _init_expedition_window() -> void:
+	expedition_window = Window.new()
+	expedition_window.title = "远征"
+	expedition_window.size = Vector2i(520, 420)
+	expedition_window.min_size = Vector2i(440, 360)
+	expedition_window.transient = true
+	expedition_window.exclusive = true
+	expedition_window.visible = false
+	expedition_window.close_requested.connect(func() -> void:
+		if _is_expedition_flow_locked():
+			status_label.text = "请先完成当前远征流程。"
+			return
+		expedition_window.hide()
+	)
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	expedition_window.add_child(margin)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	col.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_child(col)
+	expedition_hint_label = Label.new()
+	expedition_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(expedition_hint_label)
+	expedition_income_label = Label.new()
+	expedition_income_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(expedition_income_label)
+	var type_row := HBoxContainer.new()
+	type_row.add_theme_constant_override("separation", 8)
+	col.add_child(type_row)
+	var type_lbl := Label.new()
+	type_lbl.text = "类型"
+	type_row.add_child(type_lbl)
+	expedition_type_option = OptionButton.new()
+	expedition_type_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	expedition_type_option.item_selected.connect(_on_expedition_type_selected)
+	type_row.add_child(expedition_type_option)
+	expedition_item_list = ItemList.new()
+	expedition_item_list.custom_minimum_size = Vector2(0, 160)
+	expedition_item_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	expedition_item_list.allow_reselect = true
+	expedition_item_list.select_mode = ItemList.SELECT_MULTI
+	col.add_child(expedition_item_list)
+	expedition_start_button = Button.new()
+	expedition_start_button.text = "开始远征"
+	expedition_start_button.pressed.connect(_on_expedition_start_pressed)
+	col.add_child(expedition_start_button)
+	expedition_close_button = Button.new()
+	expedition_close_button.text = "关闭"
+	expedition_close_button.pressed.connect(func() -> void:
+		if _is_expedition_flow_locked():
+			status_label.text = "请先完成当前远征流程。"
+			return
+		expedition_window.hide()
+	)
+	col.add_child(expedition_close_button)
+	add_child(expedition_window)
 
 
 func _init_time_speed_window() -> void:
@@ -388,6 +504,9 @@ func _bind_signals() -> void:
 		table_dice_upgrade_buttons[t].pressed.connect(func() -> void:
 			_on_upgrade_dice_on_table_pressed(t)
 		)
+		table_expedition_buttons[t].pressed.connect(func() -> void:
+			_on_expedition_button_pressed(t)
+		)
 
 
 func _build_table_panels() -> void:
@@ -400,6 +519,7 @@ func _build_table_panels() -> void:
 	table_settle_buttons.clear()
 	table_auto_buttons.clear()
 	table_dice_upgrade_buttons.clear()
+	table_expedition_buttons.clear()
 	tables_grid.columns = 2
 	var die_size := Vector2(48, 48)
 	for table_index in range(GameState.MAX_TABLE_COUNT):
@@ -444,6 +564,10 @@ func _build_table_panels() -> void:
 		ub.text = "本桌骰子+1"
 		table_dice_upgrade_buttons.append(ub)
 		inner.add_child(ub)
+		var exb := Button.new()
+		exb.text = "远征"
+		table_expedition_buttons.append(exb)
+		inner.add_child(exb)
 		tables_grid.add_child(panel)
 
 
@@ -459,6 +583,8 @@ func _start_new_game() -> void:
 	for i in range(GameState.MAX_TABLE_COUNT):
 		table_throw_timers[i].stop()
 		table_auto_timers[i].stop()
+		if i < table_expedition_timers.size():
+			table_expedition_timers[i].stop()
 		table_is_throwing[i] = false
 		table_throw_sources[i] = ""
 		table_throw_visuals[i] = []
@@ -534,12 +660,17 @@ func _refresh_dice() -> void:
 				die_button.modulate = Color(0.85, 0.9, 1.0)
 			else:
 				die_button.modulate = Color(1.0, 0.92, 0.6) if held else Color(1, 1, 1)
-			die_button.tooltip_text = "桌%d 骰%d 点%d %s" % [
+			var tip := "桌%d 骰%d 点%d %s" % [
 				table_index + 1,
 				die_index + 1,
 				value,
 				"已锁定" if held else "可点锁定"
 			]
+			if table_index < game_state.table_die_defs.size():
+				var drow: Array = game_state.table_die_defs[table_index]
+				if die_index < drow.size() and drow[die_index] is _Die:
+					tip += "  " + (drow[die_index] as _Die).summary_label()
+			die_button.tooltip_text = tip
 			var ru := int(game_state.table_rolls_used[table_index])
 			die_button.disabled = table_is_throwing[table_index] or auto_on or ru == 0
 
@@ -566,6 +697,62 @@ func _refresh_growth_tree() -> void:
 	var auto_speed_btn := upgrade_buttons.get("auto_speed") as Button
 	auto_speed_btn.text = "间隔·满" if auto_speed_cost < 0 else "间隔"
 	auto_speed_btn.disabled = auto_speed_cost < 0 or game_state.coin_1 < auto_speed_cost
+
+	var exu := upgrade_buttons.get("expedition_unlock") as Button
+	if game_state.tech_expedition_portal_unlocked:
+		exu.text = "远征入口·已开"
+		exu.disabled = true
+	else:
+		exu.text = "远征入口"
+		exu.disabled = game_state.coin_1 < GameState.TECH_COST_EXPEDITION_ENTRY
+
+	var exd := upgrade_buttons.get("expedition_delete") as Button
+	if game_state.tech_delete_expedition_unlocked:
+		exd.text = "删骰远征·已开"
+		exd.disabled = true
+	else:
+		exd.text = "删骰远征"
+		exd.disabled = (not game_state.tech_expedition_portal_unlocked) or game_state.coin_1 < GameState.TECH_COST_DELETE_EXPEDITION
+
+	var exs := upgrade_buttons.get("expedition_synth") as Button
+	if game_state.tech_synth_expedition_unlocked:
+		exs.text = "合成远征·已开"
+		exs.disabled = true
+	else:
+		exs.text = "合成远征"
+		exs.disabled = (not game_state.tech_delete_expedition_unlocked) or game_state.coin_1 < GameState.TECH_COST_SYNTH_EXPEDITION
+
+	var dcap := upgrade_buttons.get("dice_cap_tech") as Button
+	var dcc := game_state.get_dice_cap_tech_cost_for_next_level()
+	if game_state.tech_dice_cap_level >= 2:
+		dcap.text = "骰子上限·满"
+		dcap.disabled = true
+	elif game_state.tech_dice_cap_level == 1:
+		dcap.text = "骰子上限→7"
+		dcap.disabled = game_state.coin_1 < dcc
+	else:
+		dcap.text = "骰子上限→6"
+		dcap.disabled = game_state.coin_1 < dcc
+
+	var an := upgrade_buttons.get("exp_acquire_n") as Button
+	var ac := game_state.get_acquire_n_upgrade_cost()
+	an.text = "得骰N+1" if ac >= 0 else "得骰N·满"
+	an.disabled = ac < 0 or game_state.coin_1 < ac
+
+	var dn := upgrade_buttons.get("exp_delete_n") as Button
+	var del_n_cost := game_state.get_delete_n_upgrade_cost()
+	dn.text = "删骰N+1" if del_n_cost >= 0 else "删骰N·满"
+	dn.disabled = del_n_cost < 0 or game_state.coin_1 < del_n_cost
+
+	var sn := upgrade_buttons.get("exp_synth_n") as Button
+	var sc := game_state.get_synth_n_upgrade_cost()
+	sn.text = "合成池N+1" if sc >= 0 else "合成池N·满"
+	sn.disabled = sc < 0 or game_state.coin_1 < sc
+
+	var du := upgrade_buttons.get("exp_duration") as Button
+	var duc := game_state.get_duration_upgrade_cost()
+	du.text = "远征耗时-" if duc >= 0 else "远征耗时·满"
+	du.disabled = duc < 0 or game_state.coin_1 < duc
 
 	for t in range(GameState.MAX_TABLE_COUNT):
 		var btn := table_dice_upgrade_buttons[t] as Button
@@ -610,6 +797,57 @@ func _refresh_growth_detail_cache() -> void:
 		tt_speed += "已达到自动速度上限，无法再购买。"
 	growth_node_detail_text["auto_speed"] = tt_speed
 
+	var tt_exu := "解锁后每张骰桌可使用独立「远征」入口；默认可进行获得骰子远征。\n\n"
+	if game_state.tech_expedition_portal_unlocked:
+		tt_exu += "状态：已解锁。"
+	else:
+		tt_exu += "状态：未解锁。\n购买花费：%d 货币1。" % GameState.TECH_COST_EXPEDITION_ENTRY
+	growth_node_detail_text["expedition_unlock"] = tt_exu
+
+	var tt_exd := "解锁删骰远征：从本桌骰池移除一颗低价值骰子（至少保留1颗）。\n\n"
+	if game_state.tech_delete_expedition_unlocked:
+		tt_exd += "状态：已解锁。"
+	else:
+		tt_exd += "状态：未解锁。\n购买花费：%d 货币1。\n需先解锁远征入口。" % GameState.TECH_COST_DELETE_EXPEDITION
+	growth_node_detail_text["expedition_delete"] = tt_exd
+
+	var tt_exs := "解锁合成远征：选择两颗骰子合并成一颗更强骰子（骰数-1）。\n\n"
+	if game_state.tech_synth_expedition_unlocked:
+		tt_exs += "状态：已解锁。"
+	else:
+		tt_exs += "状态：未解锁。\n购买花费：%d 货币1。\n需先解锁删骰远征。" % GameState.TECH_COST_SYNTH_EXPEDITION
+	growth_node_detail_text["expedition_synth"] = tt_exs
+
+	var tt_cap := "同一科技节点两级：Lv1 解锁第6颗骰子，Lv2 解锁第7颗；Lv2 花费远高于 Lv1。\n\n"
+	tt_cap += "当前等级：%d（单桌骰子上限 %d）。\n" % [game_state.tech_dice_cap_level, game_state.get_effective_max_dice_per_table()]
+	var nxc := game_state.get_dice_cap_tech_cost_for_next_level()
+	if nxc >= 0:
+		tt_cap += "下一级花费：%d 货币1。" % nxc
+	else:
+		tt_cap += "已满级。"
+	growth_node_detail_text["dice_cap_tech"] = tt_cap
+
+	growth_node_detail_text["exp_acquire_n"] = (
+		"提升「获得骰子」远征的候选数量（N选1）。\n\n当前N=%d，下一档花费：%s"
+		% [game_state.get_expedition_acquire_choice_n(), str(game_state.get_acquire_n_upgrade_cost()) if game_state.get_acquire_n_upgrade_cost() >= 0 else "已满"]
+	)
+	growth_node_detail_text["exp_delete_n"] = (
+		"提升「删骰」远征的候选数量（N选1）。\n\n当前N=%d，下一档花费：%s"
+		% [game_state.get_expedition_delete_choice_n(), str(game_state.get_delete_n_upgrade_cost()) if game_state.get_delete_n_upgrade_cost() >= 0 else "已满"]
+	)
+	growth_node_detail_text["exp_synth_n"] = (
+		"提升「合成」远征的候选池大小（N选2）。\n\n当前N=%d，下一档花费：%s"
+		% [game_state.get_expedition_synth_pool_n(), str(game_state.get_synth_n_upgrade_cost()) if game_state.get_synth_n_upgrade_cost() >= 0 else "已满"]
+	)
+	growth_node_detail_text["exp_duration"] = (
+		"缩短各桌远征等待时间（受时间倍速影响）。\n\n当前耗时 %.2f 秒，等级 %d，下一档花费：%s"
+		% [
+			game_state.get_expedition_duration_sec(),
+			game_state.tech_expedition_duration_level,
+			str(game_state.get_duration_upgrade_cost()) if game_state.get_duration_upgrade_cost() >= 0 else "已满"
+		]
+	)
+
 	if growth_detail_richtext == null:
 		return
 	if growth_hovered_node_id != "" and growth_node_detail_text.has(growth_hovered_node_id):
@@ -653,6 +891,8 @@ func _on_growth_button_pressed() -> void:
 
 
 func _update_all_table_buttons() -> void:
+	var active_exp_table := _active_expedition_table_index()
+	var any_exp_busy := active_exp_table >= 0
 	for t in range(game_state.table_count):
 		var throwing := table_is_throwing[t]
 		table_roll_buttons[t].disabled = throwing or game_state.is_table_auto_enabled(t) or not game_state.can_manual_roll(t)
@@ -662,10 +902,17 @@ func _update_all_table_buttons() -> void:
 		ab.text = "自动:%s" % ["开" if game_state.is_table_auto_enabled(t) else "关"]
 		var dice_cost := game_state.get_dice_upgrade_cost(t)
 		table_dice_upgrade_buttons[t].disabled = dice_cost < 0 or game_state.coin_1 < dice_cost
+		var exb2 := table_expedition_buttons[t] as Button
+		var exp_busy := t < table_expedition_timers.size() and table_expedition_timers[t].time_left > 0.0
+		var waiting_other := expedition_waiting_result_choice and expedition_table_index >= 0 and expedition_table_index != t
+		var busy_other := any_exp_busy and active_exp_table != t
+		exb2.disabled = not game_state.tech_expedition_portal_unlocked or exp_busy or waiting_other or busy_other
 	for t in range(game_state.table_count, GameState.MAX_TABLE_COUNT):
 		table_roll_buttons[t].disabled = true
 		table_settle_buttons[t].disabled = true
 		table_auto_buttons[t].disabled = true
+		if t < table_expedition_buttons.size():
+			(table_expedition_buttons[t] as Button).disabled = true
 
 
 func _on_roll_pressed(table_index: int) -> void:
@@ -828,6 +1075,315 @@ func _on_upgrade_auto_speed_pressed() -> void:
 	_refresh_all()
 
 
+func _on_tech_expedition_unlock_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_buy_expedition_portal()
+	status_label.text = "已解锁各桌远征入口。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_tech_delete_expedition_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_buy_delete_expedition()
+	status_label.text = "已解锁删骰远征。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_tech_synth_expedition_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_buy_synth_expedition()
+	status_label.text = "已解锁合成远征。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_tech_dice_cap_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_buy_dice_cap_level()
+	status_label.text = "骰子上限科技已提升。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_tech_acquire_n_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_upgrade_acquire_n()
+	status_label.text = "得骰远征选项+1。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_tech_delete_n_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_upgrade_delete_n()
+	status_label.text = "删骰远征选项+1。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_tech_synth_n_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_upgrade_synth_n()
+	status_label.text = "合成远征候选池+1。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_tech_exp_duration_pressed() -> void:
+	if _any_table_throwing():
+		return
+	var r := game_state.try_upgrade_expedition_duration()
+	status_label.text = "远征耗时已缩短。" if r["ok"] else String(r["message"])
+	if r["ok"]:
+		_save_game()
+	_refresh_all()
+
+
+func _on_expedition_button_pressed(table_index: int) -> void:
+	if table_index >= game_state.table_count:
+		return
+	if not game_state.tech_expedition_portal_unlocked:
+		status_label.text = "请先在成长树解锁远征入口。"
+		return
+	if expedition_waiting_result_choice and expedition_table_index != table_index:
+		status_label.text = "请先完成当前远征的结果选择。"
+		return
+	var active_exp_table := _active_expedition_table_index()
+	if active_exp_table >= 0 and active_exp_table != table_index:
+		status_label.text = "已有其他骰桌远征进行中。"
+		return
+	if table_index < table_expedition_timers.size() and table_expedition_timers[table_index].time_left > 0.0:
+		status_label.text = "该桌远征进行中。"
+		return
+	expedition_table_index = table_index
+	expedition_income_before = game_state.estimate_income_per_second()
+	expedition_income_label.text = "远征前估算收益/秒: %.1f" % expedition_income_before
+	expedition_hint_label.text = "桌%d：先选择远征类型并开始。远征结束后再选择结果并确认。" % [table_index + 1]
+	_refresh_expedition_type_options()
+	if expedition_pending_kind >= 0 and expedition_waiting_result_choice:
+		for i in range(expedition_type_option.item_count):
+			if int(expedition_type_option.get_item_metadata(i)) == expedition_pending_kind:
+				expedition_type_option.select(i)
+				break
+	elif expedition_type_option.item_count > 0:
+		expedition_type_option.select(0)
+	_on_expedition_type_selected(expedition_type_option.selected)
+	expedition_type_option.disabled = _is_expedition_flow_locked()
+	expedition_item_list.disabled = not expedition_waiting_result_choice
+	expedition_start_button.text = "确认结果" if expedition_waiting_result_choice else "开始远征"
+	expedition_start_button.disabled = false
+	expedition_close_button.disabled = _is_expedition_flow_locked()
+	expedition_window.popup_centered()
+
+
+func _expedition_selected_type() -> int:
+	if expedition_type_option.item_count <= 0:
+		return -1
+	var sel := expedition_type_option.selected
+	if sel < 0:
+		return -1
+	return int(expedition_type_option.get_item_metadata(sel))
+
+
+func _refresh_expedition_type_options() -> void:
+	expedition_type_option.clear()
+	if game_state.tech_expedition_portal_unlocked:
+		expedition_type_option.add_item("获得骰子")
+		expedition_type_option.set_item_metadata(expedition_type_option.item_count - 1, 0)
+	if game_state.tech_delete_expedition_unlocked:
+		expedition_type_option.add_item("删骰")
+		expedition_type_option.set_item_metadata(expedition_type_option.item_count - 1, 1)
+	if game_state.tech_synth_expedition_unlocked:
+		expedition_type_option.add_item("合成")
+		expedition_type_option.set_item_metadata(expedition_type_option.item_count - 1, 2)
+
+
+func _on_expedition_type_selected(_idx: int) -> void:
+	var ty := _expedition_selected_type()
+	if ty == 2:
+		expedition_item_list.select_mode = ItemList.SELECT_MULTI
+	else:
+		expedition_item_list.select_mode = ItemList.SELECT_SINGLE
+	_repopulate_expedition_item_list()
+
+
+func _repopulate_expedition_item_list() -> void:
+	expedition_item_list.clear()
+	expedition_acquire_candidates.clear()
+	expedition_delete_indices.clear()
+	expedition_synth_indices.clear()
+	if not expedition_waiting_result_choice:
+		expedition_item_list.add_item("远征结束后会出现可选结果。")
+		expedition_item_list.set_item_disabled(0, true)
+		return
+	var ti := expedition_table_index
+	if ti < 0 or ti >= game_state.table_count:
+		return
+	var ty := expedition_pending_kind
+	if ty == 0:
+		expedition_acquire_candidates = game_state.generate_acquire_candidates()
+		var i := 0
+		for d in expedition_acquire_candidates:
+			if d is _Die:
+				expedition_item_list.add_item("候选%d: %s" % [i + 1, (d as _Die).summary_label()])
+				expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, i)
+			i += 1
+	elif ty == 1:
+		expedition_delete_indices = game_state.get_random_delete_candidate_indices(ti)
+		for j in range(expedition_delete_indices.size()):
+			var di := expedition_delete_indices[j]
+			var row: Array = game_state.table_die_defs[ti]
+			var summ := ""
+			if di < row.size() and row[di] is _Die:
+				summ = (row[di] as _Die).summary_label()
+			expedition_item_list.add_item("删除 骰位%d: %s" % [di + 1, summ])
+			expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, di)
+	elif ty == 2:
+		expedition_synth_indices = game_state.get_random_synth_candidate_indices(ti)
+		for j in range(expedition_synth_indices.size()):
+			var di2 := expedition_synth_indices[j]
+			var row2: Array = game_state.table_die_defs[ti]
+			var summ2 := ""
+			if di2 < row2.size() and row2[di2] is _Die:
+				summ2 = (row2[di2] as _Die).summary_label()
+			expedition_item_list.add_item("骰位%d: %s" % [di2 + 1, summ2])
+			expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, di2)
+
+
+func _on_expedition_start_pressed() -> void:
+	var ti := expedition_table_index
+	if ti < 0 or ti >= game_state.table_count:
+		return
+	if ti < table_expedition_timers.size() and table_expedition_timers[ti].time_left > 0.0:
+		return
+	if expedition_waiting_result_choice:
+		_confirm_expedition_result()
+		return
+	var ty := _expedition_selected_type()
+	_reset_expedition_pending_selection()
+	if ty == 0:
+		if game_state.get_table_dice_count(ti) >= game_state.get_effective_max_dice_per_table():
+			status_label.text = "已达骰子上限，无法再通过远征获得骰子。"
+			return
+	elif ty == 1:
+		if game_state.get_table_dice_count(ti) <= 1:
+			status_label.text = "至少需要2颗骰子才能进行删骰远征。"
+			return
+	elif ty == 2:
+		if game_state.get_table_dice_count(ti) < 2:
+			status_label.text = "至少需要2颗骰子才能进行合成远征。"
+			return
+	else:
+		status_label.text = "没有可用的远征类型。"
+		return
+	expedition_pending_kind = ty
+	var dur := game_state.get_expedition_duration_sec() / maxf(0.05, float(Engine.time_scale))
+	table_expedition_timers[ti].wait_time = dur
+	table_expedition_timers[ti].start()
+	expedition_waiting_result_choice = false
+	expedition_type_option.disabled = true
+	expedition_item_list.disabled = true
+	expedition_item_list.clear()
+	expedition_start_button.disabled = true
+	expedition_start_button.text = "远征进行中..."
+	expedition_close_button.disabled = true
+	status_label.text = "桌%d 远征进行中（%.1fs）…" % [ti + 1, dur]
+	expedition_hint_label.text = "桌%d 远征进行中，结束后请选择结果并确认。" % [ti + 1]
+	_refresh_all()
+
+
+func _on_table_expedition_timer_timeout(table_index: int) -> void:
+	if table_index != expedition_table_index:
+		return
+	expedition_waiting_result_choice = true
+	expedition_type_option.disabled = true
+	expedition_item_list.disabled = false
+	expedition_hint_label.text = "桌%d 远征已完成：请选择结果并点击「确认结果」。" % [table_index + 1]
+	_repopulate_expedition_item_list()
+	expedition_start_button.text = "确认结果"
+	expedition_start_button.disabled = false
+	expedition_close_button.disabled = true
+	status_label.text = "桌%d 远征完成，等待选择结果。" % [table_index + 1]
+	_refresh_all()
+
+
+func _confirm_expedition_result() -> void:
+	var ti := expedition_table_index
+	if ti < 0 or ti >= game_state.table_count:
+		return
+	_reset_expedition_pending_selection()
+	if expedition_pending_kind == 0:
+		var sel := expedition_item_list.get_selected_items()
+		if sel.size() != 1:
+			status_label.text = "获得远征：请选择一个候选骰子。"
+			return
+		var ci := int(expedition_item_list.get_item_metadata(sel[0]))
+		if ci < 0 or ci >= expedition_acquire_candidates.size():
+			status_label.text = "选择无效。"
+			return
+		expedition_pending_acquire_idx = ci
+	elif expedition_pending_kind == 1:
+		var sel1 := expedition_item_list.get_selected_items()
+		if sel1.size() != 1:
+			status_label.text = "删骰远征：请选择一个删除目标。"
+			return
+		expedition_pending_delete_die_idx = int(expedition_item_list.get_item_metadata(sel1[0]))
+	elif expedition_pending_kind == 2:
+		var sel2 := expedition_item_list.get_selected_items()
+		if sel2.size() != 2:
+			status_label.text = "合成远征：请在列表中点选两颗骰子。"
+			return
+		var a := int(expedition_item_list.get_item_metadata(sel2[0]))
+		var b := int(expedition_item_list.get_item_metadata(sel2[1]))
+		expedition_pending_synth_lo = mini(a, b)
+		expedition_pending_synth_hi = maxi(a, b)
+	else:
+		status_label.text = "远征状态异常。"
+		return
+	var msg := ""
+	if expedition_pending_kind == 0:
+		var die: _Die = expedition_acquire_candidates[expedition_pending_acquire_idx] as _Die
+		var r := game_state.apply_expedition_acquire(ti, die)
+		msg = "获得新骰子。" if r["ok"] else String(r["message"])
+	elif expedition_pending_kind == 1:
+		var r2 := game_state.apply_expedition_delete(ti, expedition_pending_delete_die_idx)
+		msg = "已删除骰子。" if r2["ok"] else String(r2["message"])
+	elif expedition_pending_kind == 2:
+		var r3 := game_state.apply_expedition_synth(ti, expedition_pending_synth_lo, expedition_pending_synth_hi)
+		msg = "合成完成。" if r3["ok"] else String(r3["message"])
+	var after := game_state.estimate_income_per_second()
+	expedition_income_label.text = "远征前估算收益/秒: %.1f  →  现在: %.1f" % [expedition_income_before, after]
+	status_label.text = "桌%d %s" % [ti + 1, msg]
+	expedition_waiting_result_choice = false
+	expedition_pending_kind = -1
+	_reset_expedition_pending_selection()
+	expedition_type_option.disabled = false
+	expedition_item_list.disabled = true
+	expedition_start_button.text = "开始远征"
+	expedition_start_button.disabled = false
+	expedition_close_button.disabled = false
+	expedition_hint_label.text = "桌%d：先选择远征类型并开始。远征结束后再选择结果并确认。" % [ti + 1]
+	_save_game()
+	_refresh_all()
+	_repopulate_expedition_item_list()
+
+
 func _save_game() -> void:
 	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if file == null:
@@ -864,6 +1420,8 @@ func _load_game() -> bool:
 	for i in range(GameState.MAX_TABLE_COUNT):
 		table_throw_timers[i].stop()
 		table_auto_timers[i].stop()
+		if i < table_expedition_timers.size():
+			table_expedition_timers[i].stop()
 		table_is_throwing[i] = false
 		table_throw_sources[i] = ""
 		table_throw_visuals[i] = []
@@ -892,7 +1450,7 @@ func _start_throw_phase(table_index: int, source: String) -> void:
 func _fill_throw_visuals_for_table(table_index: int) -> void:
 	var dc := game_state.get_table_dice_count(table_index)
 	var arr: Array[int] = []
-	for _i in range(dc):
+	for i in range(dc):
 		arr.append(randi_range(DiceLogic.FACE_MIN, DiceLogic.FACE_MAX))
 	table_throw_visuals[table_index] = arr
 
@@ -935,3 +1493,21 @@ func _on_table_throw_timer_timeout(table_index: int) -> void:
 			return
 	_apply_table_auto_timer(table_index)
 	_refresh_all()
+
+
+func _active_expedition_table_index() -> int:
+	for i in range(table_expedition_timers.size()):
+		if table_expedition_timers[i].time_left > 0.0:
+			return i
+	return -1
+
+
+func _is_expedition_flow_locked() -> bool:
+	return expedition_waiting_result_choice or _active_expedition_table_index() >= 0
+
+
+func _reset_expedition_pending_selection() -> void:
+	expedition_pending_acquire_idx = -1
+	expedition_pending_delete_die_idx = -1
+	expedition_pending_synth_lo = -1
+	expedition_pending_synth_hi = -1

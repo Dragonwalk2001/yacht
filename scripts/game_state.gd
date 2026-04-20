@@ -2,6 +2,10 @@ class_name GameState
 extends RefCounted
 
 const DiceFaceStatsT := preload("res://scripts/dice_face_stats.gd")
+const _Die := preload("res://scripts/die_definition.gd")
+
+const SAVE_DATA_VERSION_V2: int = 2
+const SAVE_DATA_VERSION_V3: int = 3
 
 const MAX_ROLLS_PER_TURN: int = 3
 const MIN_DICE_COUNT: int = 1
@@ -13,6 +17,25 @@ const MIN_AUTO_INTERVAL: float = 1.0
 const AUTO_INTERVAL_STEP: float = 0.2
 const MAX_AUTO_SPEED_LEVEL: int = 10
 const AUTO_SPEED_BASE_COST: int = 100
+
+const BASE_DICE_CAP_BEFORE_TECH: int = 5
+const TECH_COST_EXPEDITION_ENTRY: int = 180
+const TECH_COST_DELETE_EXPEDITION: int = 320
+const TECH_COST_SYNTH_EXPEDITION: int = 650
+const TECH_COST_DICE_CAP_LEVEL_1: int = 450
+const TECH_COST_DICE_CAP_LEVEL_2: int = 5000
+const TECH_COST_ACQUIRE_N_BASE: int = 220
+const TECH_COST_DELETE_N_BASE: int = 220
+const TECH_COST_SYNTH_N_BASE: int = 260
+const TECH_COST_DURATION_BASE: int = 280
+const EXPEDITION_BASE_N: int = 3
+const EXPEDITION_MAX_N: int = 8
+const EXPEDITION_SYNTH_BASE_N: int = 4
+const EXPEDITION_SYNTH_MAX_N: int = 10
+const EXPEDITION_BASE_DURATION_SEC: float = 10.0
+const EXPEDITION_MIN_DURATION_SEC: float = 2.0
+const EXPEDITION_DURATION_STEP_SEC: float = 1.1
+const EXPEDITION_MAX_DURATION_LEVEL: int = 6
 
 var coin_1: int = 0
 var total_coin_earned: int = 0
@@ -27,6 +50,17 @@ var last_settlement_base: int = 0
 var last_settlement_multiplier: float = 1.0
 var recent_income_window: Array[Dictionary] = []
 var dice_face_stats = DiceFaceStatsT.new()
+
+var tech_expedition_portal_unlocked: bool = false
+var tech_delete_expedition_unlocked: bool = false
+var tech_synth_expedition_unlocked: bool = false
+var tech_dice_cap_level: int = 0
+var tech_expedition_acquire_n_level: int = 0
+var tech_expedition_delete_n_level: int = 0
+var tech_expedition_synth_n_level: int = 0
+var tech_expedition_duration_level: int = 0
+
+var table_die_defs: Array = []
 
 var table_dice_counts: Array = []
 var table_rolls_used: Array = []
@@ -50,6 +84,14 @@ func initialize() -> void:
 	last_settlement_multiplier = 1.0
 	recent_income_window.clear()
 	dice_face_stats.reset()
+	tech_expedition_portal_unlocked = false
+	tech_delete_expedition_unlocked = false
+	tech_synth_expedition_unlocked = false
+	tech_dice_cap_level = 0
+	tech_expedition_acquire_n_level = 0
+	tech_expedition_delete_n_level = 0
+	tech_expedition_synth_n_level = 0
+	tech_expedition_duration_level = 0
 	_reset_all_tables()
 
 
@@ -60,6 +102,7 @@ func _reset_all_tables() -> void:
 	table_holds.clear()
 	per_table_auto_enabled.clear()
 	table_auto_staging.clear()
+	table_die_defs.clear()
 	for _i in range(table_count):
 		table_dice_counts.append(MIN_DICE_COUNT)
 		table_rolls_used.append(0)
@@ -67,6 +110,309 @@ func _reset_all_tables() -> void:
 		table_holds.append(DiceLogic.create_default_holds(MIN_DICE_COUNT))
 		per_table_auto_enabled.append(false)
 		table_auto_staging.append([])
+		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
+
+
+func _create_default_die_row(count: int) -> Array:
+	var row: Array = []
+	for _j in range(maxi(1, count)):
+		row.append(_Die.create_standard())
+	return row
+
+
+func get_effective_max_dice_per_table() -> int:
+	return clampi(BASE_DICE_CAP_BEFORE_TECH + tech_dice_cap_level, MIN_DICE_COUNT, MAX_DICE_COUNT)
+
+
+func _get_die_defs_row(table_index: int) -> Array:
+	if not _ensure_table_index(table_index):
+		return []
+	_ensure_die_defs_row_size(table_index)
+	return table_die_defs[table_index] as Array
+
+
+func _ensure_die_defs_row_size(table_index: int) -> void:
+	if not _ensure_table_index(table_index):
+		return
+	var dc := get_table_dice_count(table_index)
+	while table_die_defs.size() < table_count:
+		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
+	while table_die_defs.size() > table_count:
+		table_die_defs.pop_back()
+	var row: Array = table_die_defs[table_index]
+	while row.size() < dc:
+		row.append(_Die.create_standard())
+	while row.size() > dc:
+		row.pop_back()
+
+
+func get_expedition_acquire_choice_n() -> int:
+	return clampi(EXPEDITION_BASE_N + tech_expedition_acquire_n_level, EXPEDITION_BASE_N, EXPEDITION_MAX_N)
+
+
+func get_expedition_delete_choice_n() -> int:
+	return clampi(EXPEDITION_BASE_N + tech_expedition_delete_n_level, EXPEDITION_BASE_N, EXPEDITION_MAX_N)
+
+
+func get_expedition_synth_pool_n() -> int:
+	return clampi(EXPEDITION_SYNTH_BASE_N + tech_expedition_synth_n_level, EXPEDITION_SYNTH_BASE_N, EXPEDITION_SYNTH_MAX_N)
+
+
+func get_expedition_duration_sec() -> float:
+	var lv := clampi(tech_expedition_duration_level, 0, EXPEDITION_MAX_DURATION_LEVEL)
+	var t := EXPEDITION_BASE_DURATION_SEC - float(lv) * EXPEDITION_DURATION_STEP_SEC
+	return maxf(EXPEDITION_MIN_DURATION_SEC, t)
+
+
+func get_acquire_n_upgrade_cost() -> int:
+	if tech_expedition_acquire_n_level >= EXPEDITION_MAX_N - EXPEDITION_BASE_N:
+		return -1
+	return int(float(TECH_COST_ACQUIRE_N_BASE) * pow(1.78, float(tech_expedition_acquire_n_level)))
+
+
+func get_delete_n_upgrade_cost() -> int:
+	if tech_expedition_delete_n_level >= EXPEDITION_MAX_N - EXPEDITION_BASE_N:
+		return -1
+	return int(float(TECH_COST_DELETE_N_BASE) * pow(1.78, float(tech_expedition_delete_n_level)))
+
+
+func get_synth_n_upgrade_cost() -> int:
+	if tech_expedition_synth_n_level >= EXPEDITION_SYNTH_MAX_N - EXPEDITION_SYNTH_BASE_N:
+		return -1
+	return int(float(TECH_COST_SYNTH_N_BASE) * pow(1.78, float(tech_expedition_synth_n_level)))
+
+
+func get_duration_upgrade_cost() -> int:
+	if tech_expedition_duration_level >= EXPEDITION_MAX_DURATION_LEVEL:
+		return -1
+	return int(float(TECH_COST_DURATION_BASE) * pow(1.65, float(tech_expedition_duration_level)))
+
+
+func get_dice_cap_tech_cost_for_next_level() -> int:
+	if tech_dice_cap_level >= 2:
+		return -1
+	if tech_dice_cap_level == 0:
+		return TECH_COST_DICE_CAP_LEVEL_1
+	return TECH_COST_DICE_CAP_LEVEL_2
+
+
+func try_buy_expedition_portal() -> Dictionary:
+	if tech_expedition_portal_unlocked:
+		return {"ok": false, "message": "远征入口已解锁。"}
+	if coin_1 < TECH_COST_EXPEDITION_ENTRY:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= TECH_COST_EXPEDITION_ENTRY
+	tech_expedition_portal_unlocked = true
+	return {"ok": true}
+
+
+func try_buy_delete_expedition() -> Dictionary:
+	if not tech_expedition_portal_unlocked:
+		return {"ok": false, "message": "请先解锁远征入口。"}
+	if tech_delete_expedition_unlocked:
+		return {"ok": false, "message": "删骰远征已解锁。"}
+	if coin_1 < TECH_COST_DELETE_EXPEDITION:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= TECH_COST_DELETE_EXPEDITION
+	tech_delete_expedition_unlocked = true
+	return {"ok": true}
+
+
+func try_buy_synth_expedition() -> Dictionary:
+	if not tech_delete_expedition_unlocked:
+		return {"ok": false, "message": "请先解锁删骰远征。"}
+	if tech_synth_expedition_unlocked:
+		return {"ok": false, "message": "合成远征已解锁。"}
+	if coin_1 < TECH_COST_SYNTH_EXPEDITION:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= TECH_COST_SYNTH_EXPEDITION
+	tech_synth_expedition_unlocked = true
+	return {"ok": true}
+
+
+func try_buy_dice_cap_level() -> Dictionary:
+	var cost := get_dice_cap_tech_cost_for_next_level()
+	if cost < 0:
+		return {"ok": false, "message": "骰子上限科技已满。"}
+	if coin_1 < cost:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= cost
+	tech_dice_cap_level = mini(2, tech_dice_cap_level + 1)
+	return {"ok": true}
+
+
+func try_upgrade_acquire_n() -> Dictionary:
+	var cost := get_acquire_n_upgrade_cost()
+	if cost < 0:
+		return {"ok": false, "message": "得骰选项数已满。"}
+	if coin_1 < cost:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= cost
+	tech_expedition_acquire_n_level += 1
+	return {"ok": true}
+
+
+func try_upgrade_delete_n() -> Dictionary:
+	var cost := get_delete_n_upgrade_cost()
+	if cost < 0:
+		return {"ok": false, "message": "删骰选项数已满。"}
+	if coin_1 < cost:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= cost
+	tech_expedition_delete_n_level += 1
+	return {"ok": true}
+
+
+func try_upgrade_synth_n() -> Dictionary:
+	var cost := get_synth_n_upgrade_cost()
+	if cost < 0:
+		return {"ok": false, "message": "合成候选池已满。"}
+	if coin_1 < cost:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= cost
+	tech_expedition_synth_n_level += 1
+	return {"ok": true}
+
+
+func try_upgrade_expedition_duration() -> Dictionary:
+	var cost := get_duration_upgrade_cost()
+	if cost < 0:
+		return {"ok": false, "message": "远征耗时升级已满。"}
+	if coin_1 < cost:
+		return {"ok": false, "message": "货币1不足。"}
+	coin_1 -= cost
+	tech_expedition_duration_level += 1
+	return {"ok": true}
+
+
+func generate_acquire_candidates() -> Array:
+	var n := get_expedition_acquire_choice_n()
+	var out: Array = []
+	for _i in range(n):
+		out.append(_Die.create_random_biased())
+	return out
+
+
+func get_random_delete_candidate_indices(table_index: int) -> Array[int]:
+	var dc := get_table_dice_count(table_index)
+	if dc <= 1:
+		return []
+	var n := mini(get_expedition_delete_choice_n(), dc)
+	var pool: Array[int] = []
+	for i in range(dc):
+		pool.append(i)
+	pool.shuffle()
+	var out: Array[int] = []
+	for j in range(n):
+		out.append(pool[j])
+	out.sort()
+	return out
+
+
+func get_random_synth_candidate_indices(table_index: int) -> Array[int]:
+	var dc := get_table_dice_count(table_index)
+	if dc < 2:
+		return []
+	var want := mini(get_expedition_synth_pool_n(), dc)
+	var pool: Array[int] = []
+	for i in range(dc):
+		pool.append(i)
+	pool.shuffle()
+	var out: Array[int] = []
+	for j in range(want):
+		out.append(pool[j])
+	out.sort()
+	return out
+
+
+func apply_expedition_acquire(table_index: int, die: _Die) -> Dictionary:
+	if not _ensure_table_index(table_index):
+		return {"ok": false, "message": "无效骰桌。"}
+	if not tech_expedition_portal_unlocked:
+		return {"ok": false, "message": "远征未解锁。"}
+	var dc := get_table_dice_count(table_index)
+	if dc >= get_effective_max_dice_per_table():
+		return {"ok": false, "message": "已达本桌骰子上限，无法再通过远征获得。"}
+	coin_1 = maxi(0, coin_1)
+	table_dice_counts[table_index] = dc + 1
+	_ensure_die_defs_row_size(table_index)
+	var row: Array = table_die_defs[table_index]
+	if row.size() > dc:
+		row[dc] = die.duplicate_die()
+	var vals: Array = table_dice_values[table_index]
+	vals.append(1)
+	table_dice_values[table_index] = vals
+	var holds: Array = table_holds[table_index]
+	holds.append(false)
+	table_holds[table_index] = holds
+	_clamp_all_table_rows()
+	return {"ok": true}
+
+
+func apply_expedition_delete(table_index: int, die_index: int) -> Dictionary:
+	if not _ensure_table_index(table_index):
+		return {"ok": false, "message": "无效骰桌。"}
+	if not tech_delete_expedition_unlocked:
+		return {"ok": false, "message": "删骰远征未解锁。"}
+	var dc := get_table_dice_count(table_index)
+	if dc <= MIN_DICE_COUNT:
+		return {"ok": false, "message": "至少保留1颗骰子。"}
+	if die_index < 0 or die_index >= dc:
+		return {"ok": false, "message": "无效的删除目标。"}
+	table_dice_counts[table_index] = dc - 1
+	var row: Array = table_die_defs[table_index]
+	if die_index >= 0 and die_index < row.size():
+		row.remove_at(die_index)
+	var vals: Array = table_dice_values[table_index]
+	if die_index >= 0 and die_index < vals.size():
+		vals.remove_at(die_index)
+	table_dice_values[table_index] = vals
+	var holds: Array = table_holds[table_index]
+	if die_index >= 0 and die_index < holds.size():
+		holds.remove_at(die_index)
+	table_holds[table_index] = holds
+	var st: Array = table_auto_staging[table_index]
+	if st.size() > 0:
+		table_auto_staging[table_index] = []
+	_clamp_all_table_rows()
+	return {"ok": true}
+
+
+func apply_expedition_synth(table_index: int, idx_a: int, idx_b: int) -> Dictionary:
+	if not _ensure_table_index(table_index):
+		return {"ok": false, "message": "无效骰桌。"}
+	if not tech_synth_expedition_unlocked:
+		return {"ok": false, "message": "合成远征未解锁。"}
+	var dc := get_table_dice_count(table_index)
+	if dc < 2:
+		return {"ok": false, "message": "至少需要2颗骰子才能合成。"}
+	if idx_a == idx_b:
+		return {"ok": false, "message": "请选择两颗不同的骰子。"}
+	if idx_a < 0 or idx_a >= dc or idx_b < 0 or idx_b >= dc:
+		return {"ok": false, "message": "无效的下标。"}
+	var row: Array = _get_die_defs_row(table_index)
+	var da: _Die = row[idx_a] as _Die
+	var db: _Die = row[idx_b] as _Die
+	var merged := _Die.merge(da, db)
+	var hi := maxi(idx_a, idx_b)
+	var lo := mini(idx_a, idx_b)
+	row.remove_at(hi)
+	row.remove_at(lo)
+	row.insert(lo, merged)
+	table_dice_counts[table_index] = dc - 1
+	var vals: Array = table_dice_values[table_index]
+	vals.remove_at(hi)
+	vals.remove_at(lo)
+	vals.insert(lo, 1)
+	table_dice_values[table_index] = vals
+	var holds: Array = table_holds[table_index]
+	holds.remove_at(hi)
+	holds.remove_at(lo)
+	holds.insert(lo, false)
+	table_holds[table_index] = holds
+	table_auto_staging[table_index] = []
+	_clamp_all_table_rows()
+	return {"ok": true}
 
 
 func _ensure_table_index(table_index: int) -> bool:
@@ -113,7 +459,8 @@ func roll_manual(table_index: int) -> Dictionary:
 		return {"ok": false, "message": "本回合重投次数已用完，请先结算。"}
 	var values: Array = table_dice_values[table_index]
 	var holds: Array = table_holds[table_index]
-	var next_values := DiceLogic.roll_dice(values, holds)
+	var defs := _get_die_defs_row(table_index)
+	var next_values := DiceLogic.roll_dice_with_definitions(values, holds, defs)
 	dice_face_stats.record_rerolled_only(holds, next_values)
 	table_dice_values[table_index] = next_values
 	table_rolls_used[table_index] = int(table_rolls_used[table_index]) + 1
@@ -187,7 +534,7 @@ func get_dice_upgrade_cost(table_index: int) -> int:
 	if not _ensure_table_index(table_index):
 		return -1
 	var dc := get_table_dice_count(table_index)
-	if dc >= MAX_DICE_COUNT:
+	if dc >= get_effective_max_dice_per_table():
 		return -1
 	return int(35 * pow(1.75, dc - MIN_DICE_COUNT))
 
@@ -207,6 +554,9 @@ func upgrade_dice_on_table(table_index: int) -> Dictionary:
 		return {"ok": false, "message": "货币1不足。"}
 	coin_1 -= cost
 	table_dice_counts[table_index] = int(table_dice_counts[table_index]) + 1
+	_ensure_die_defs_row_size(table_index)
+	var def_row: Array = table_die_defs[table_index]
+	def_row.append(_Die.create_standard())
 	var in_active_turn := int(table_rolls_used[table_index]) > 0
 	var auto_staging: Array = table_auto_staging[table_index]
 	var has_pending_auto := auto_staging.size() > 0
@@ -248,6 +598,7 @@ func upgrade_table_count() -> Dictionary:
 	table_holds.append(DiceLogic.create_default_holds(MIN_DICE_COUNT))
 	per_table_auto_enabled.append(auto_unlocked)
 	table_auto_staging.append([])
+	table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
 	return {"ok": true}
 
 
@@ -343,20 +694,21 @@ func _reset_table_turn(table_index: int) -> void:
 		return
 	var dc := get_table_dice_count(table_index)
 	table_rolls_used[table_index] = 0
-	table_dice_values[table_index] = DiceLogic.create_default_dice(dc)
+	var defs := _get_die_defs_row(table_index)
+	table_dice_values[table_index] = DiceLogic.roll_fresh_dice_with_definitions(defs)
 	table_holds[table_index] = DiceLogic.create_default_holds(dc)
 	table_auto_staging[table_index] = []
 
 
 func _build_auto_cycle_dice_for_table(table_index: int) -> Array[int]:
-	var dc := get_table_dice_count(table_index)
-	var dice := DiceLogic.roll_fresh_dice(dc)
+	var defs := _get_die_defs_row(table_index)
+	var dice := DiceLogic.roll_fresh_dice_with_definitions(defs)
 	dice_face_stats.record_all_faces(dice)
 	for _i in range(MAX_ROLLS_PER_TURN - 1):
 		var holds: Array[bool] = []
 		for value in dice:
 			holds.append(value >= 5)
-		dice = DiceLogic.roll_dice(dice, holds)
+		dice = DiceLogic.roll_dice_with_definitions(dice, holds, defs)
 		dice_face_stats.record_rerolled_only(holds, dice)
 	return dice
 
@@ -402,7 +754,7 @@ func _record_income_event(amount: int) -> void:
 
 func to_save_data() -> Dictionary:
 	return {
-		"version": 2,
+		"version": SAVE_DATA_VERSION_V3,
 		"coin_1": coin_1,
 		"total_coin_earned": total_coin_earned,
 		"table_count": table_count,
@@ -420,7 +772,16 @@ func to_save_data() -> Dictionary:
 		"table_dice_values": _nested_dice_to_save(table_dice_values),
 		"table_holds": _nested_holds_to_save(table_holds),
 		"per_table_auto_enabled": _bool_array_to_save(per_table_auto_enabled),
-		"table_auto_staging": _nested_dice_to_save(table_auto_staging)
+		"table_auto_staging": _nested_dice_to_save(table_auto_staging),
+		"tech_expedition_portal_unlocked": tech_expedition_portal_unlocked,
+		"tech_delete_expedition_unlocked": tech_delete_expedition_unlocked,
+		"tech_synth_expedition_unlocked": tech_synth_expedition_unlocked,
+		"tech_dice_cap_level": tech_dice_cap_level,
+		"tech_expedition_acquire_n_level": tech_expedition_acquire_n_level,
+		"tech_expedition_delete_n_level": tech_expedition_delete_n_level,
+		"tech_expedition_synth_n_level": tech_expedition_synth_n_level,
+		"tech_expedition_duration_level": tech_expedition_duration_level,
+		"table_die_defs": _die_defs_nested_to_save()
 	}
 
 
@@ -457,6 +818,29 @@ func load_from_save_data(data: Dictionary) -> bool:
 	else:
 		_migrate_v1_to_v2(data)
 
+	if ver >= SAVE_DATA_VERSION_V3:
+		tech_expedition_portal_unlocked = bool(data.get("tech_expedition_portal_unlocked", false))
+		tech_delete_expedition_unlocked = bool(data.get("tech_delete_expedition_unlocked", false))
+		tech_synth_expedition_unlocked = bool(data.get("tech_synth_expedition_unlocked", false))
+		tech_dice_cap_level = clampi(int(data.get("tech_dice_cap_level", 0)), 0, 2)
+		tech_expedition_acquire_n_level = maxi(0, int(data.get("tech_expedition_acquire_n_level", 0)))
+		tech_expedition_delete_n_level = maxi(0, int(data.get("tech_expedition_delete_n_level", 0)))
+		tech_expedition_synth_n_level = maxi(0, int(data.get("tech_expedition_synth_n_level", 0)))
+		tech_expedition_duration_level = clampi(int(data.get("tech_expedition_duration_level", 0)), 0, EXPEDITION_MAX_DURATION_LEVEL)
+		_load_die_defs_from_save(data.get("table_die_defs", []))
+	else:
+		tech_expedition_portal_unlocked = false
+		tech_delete_expedition_unlocked = false
+		tech_synth_expedition_unlocked = false
+		tech_expedition_acquire_n_level = 0
+		tech_expedition_delete_n_level = 0
+		tech_expedition_synth_n_level = 0
+		tech_expedition_duration_level = 0
+		_infer_tech_dice_cap_from_loaded_counts()
+		_migrate_die_defs_from_counts()
+
+	_clamp_all_table_rows()
+
 	return true
 
 
@@ -468,7 +852,6 @@ func _load_v2_tables(data: Dictionary) -> void:
 	table_holds = _read_nested_holds(data.get("table_holds", []))
 	per_table_auto_enabled = _read_bool_array(data.get("per_table_auto_enabled", []))
 	table_auto_staging = _read_nested_dice_allow_empty(data.get("table_auto_staging", []))
-	_clamp_all_table_rows()
 
 
 func _migrate_v1_to_v2(data: Dictionary) -> void:
@@ -493,6 +876,7 @@ func _migrate_v1_to_v2(data: Dictionary) -> void:
 	table_holds.clear()
 	per_table_auto_enabled.clear()
 	table_auto_staging.clear()
+	table_die_defs.clear()
 	for i in range(table_count):
 		table_dice_counts.append(legacy_dice)
 		table_rolls_used.append(legacy_rolls if i == 0 else 0)
@@ -504,7 +888,7 @@ func _migrate_v1_to_v2(data: Dictionary) -> void:
 		else:
 			table_dice_values.append(DiceLogic.create_default_dice(legacy_dice))
 			table_holds.append(DiceLogic.create_default_holds(legacy_dice))
-	_clamp_all_table_rows()
+		table_die_defs.append(_create_default_die_row(legacy_dice))
 
 
 func _normalize_table_arrays() -> void:
@@ -524,14 +908,72 @@ func _normalize_table_arrays() -> void:
 		table_auto_staging.append([])
 	while table_auto_staging.size() > table_count:
 		table_auto_staging.pop_back()
+	while table_die_defs.size() < table_count:
+		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
+	while table_die_defs.size() > table_count:
+		table_die_defs.pop_back()
+
+
+func _infer_tech_dice_cap_from_loaded_counts() -> void:
+	var mx := MIN_DICE_COUNT
+	for i in range(mini(table_dice_counts.size(), table_count)):
+		mx = maxi(mx, int(table_dice_counts[i]))
+	if mx >= 7:
+		tech_dice_cap_level = 2
+	elif mx >= 6:
+		tech_dice_cap_level = 1
+	else:
+		tech_dice_cap_level = 0
+
+
+func _migrate_die_defs_from_counts() -> void:
+	table_die_defs.clear()
+	for i in range(table_count):
+		var dc := clampi(int(table_dice_counts[i]), MIN_DICE_COUNT, MAX_DICE_COUNT)
+		table_die_defs.append(_create_default_die_row(dc))
+
+
+func _load_die_defs_from_save(raw: Variant) -> void:
+	table_die_defs.clear()
+	if not (raw is Array):
+		_migrate_die_defs_from_counts()
+		return
+	var outer: Array = raw
+	for i in range(table_count):
+		var row: Array = []
+		if i < outer.size() and outer[i] is Array:
+			for cell in outer[i]:
+				if cell is Dictionary:
+					row.append(_Die.from_dict(cell))
+		while row.size() < MIN_DICE_COUNT:
+			row.append(_Die.create_standard())
+		table_die_defs.append(row)
+	while table_die_defs.size() < table_count:
+		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
+	while table_die_defs.size() > table_count:
+		table_die_defs.pop_back()
+
+
+func _die_defs_nested_to_save() -> Array:
+	var out: Array = []
+	for i in range(table_count):
+		var inner: Array = []
+		var row: Array = table_die_defs[i] if i < table_die_defs.size() else []
+		for d in row:
+			if d is _Die:
+				inner.append((d as _Die).to_dict())
+		out.append(inner)
+	return out
 
 
 func _clamp_all_table_rows() -> void:
 	_normalize_table_arrays()
 	for i in range(table_count):
-		var dc := clampi(int(table_dice_counts[i]), MIN_DICE_COUNT, MAX_DICE_COUNT)
+		var em := get_effective_max_dice_per_table()
+		var dc := clampi(int(table_dice_counts[i]), MIN_DICE_COUNT, em)
 		table_dice_counts[i] = dc
 		table_rolls_used[i] = clampi(int(table_rolls_used[i]), 0, MAX_ROLLS_PER_TURN)
+		_ensure_die_defs_row_size(i)
 		table_dice_values[i] = _clone_dice_row(table_dice_values[i], dc)
 		table_holds[i] = _normalize_holds_row(table_holds[i], dc)
 		var st: Array = table_auto_staging[i]
