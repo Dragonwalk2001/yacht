@@ -743,6 +743,13 @@ func _add_coin(amount: int) -> void:
 	total_coin_earned += safe_amount
 
 
+func grant_coin_for_admin(amount: int) -> Dictionary:
+	if amount <= 0:
+		return {"ok": false, "message": "金额需大于0。"}
+	_add_coin(amount)
+	return {"ok": true, "granted": amount}
+
+
 func _record_income_event(amount: int) -> void:
 	recent_income_window.append({
 		"income": amount,

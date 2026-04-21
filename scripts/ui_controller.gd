@@ -15,6 +15,8 @@ const _Die := preload("res://scripts/die_definition.gd")
 @onready var throw_pulse_timer: Timer = $ThrowPulseTimer
 
 var dice_stats_dialog: AcceptDialog
+var admin_grant_window: ConfirmationDialog
+var admin_grant_input: LineEdit
 var growth_window: Window
 var growth_coin_label: Label
 var growth_node_panels: Dictionary = {}
@@ -93,6 +95,7 @@ func _ready() -> void:
 	randomize()
 	_TimeSpeedSettings.apply_engine_multiplier(time_speed)
 	_init_dice_stats_dialog()
+	_init_admin_grant_window()
 	_init_growth_window()
 	_init_expedition_window()
 	_init_time_speed_window()
@@ -200,6 +203,40 @@ func _init_dice_stats_dialog() -> void:
 	dice_stats_dialog.dialog_autowrap = true
 	dice_stats_dialog.min_size = Vector2i(440, 180)
 	add_child(dice_stats_dialog)
+
+
+func _init_admin_grant_window() -> void:
+	admin_grant_window = ConfirmationDialog.new()
+	admin_grant_window.title = "管理员手动加钱"
+	admin_grant_window.ok_button_text = "发放"
+	admin_grant_window.cancel_button_text = "取消"
+	admin_grant_window.min_size = Vector2i(360, 140)
+	admin_grant_window.dialog_hide_on_ok = true
+	admin_grant_window.confirmed.connect(_on_admin_grant_confirmed)
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	admin_grant_window.add_child(margin)
+	var col := VBoxContainer.new()
+	col.set_anchors_preset(Control.PRESET_FULL_RECT)
+	col.add_theme_constant_override("separation", 8)
+	margin.add_child(col)
+	var hint := Label.new()
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.text = "输入要直接发放的货币1数量。"
+	col.add_child(hint)
+	admin_grant_input = LineEdit.new()
+	admin_grant_input.placeholder_text = "例如 5000"
+	admin_grant_input.max_length = 10
+	admin_grant_input.text_submitted.connect(func(_text: String) -> void:
+		if admin_grant_window.visible:
+			_on_admin_grant_confirmed()
+	)
+	col.add_child(admin_grant_input)
+	add_child(admin_grant_window)
 
 
 func _init_growth_window() -> void:
@@ -885,6 +922,7 @@ func _bind_signals() -> void:
 	var pop := menu_button.get_popup()
 	pop.add_item("掷骰统计…", 0)
 	pop.add_item("时间倍速…", 1)
+	pop.add_item("管理员手动加钱…", 2)
 	pop.id_pressed.connect(_on_game_menu_id_pressed)
 	growth_button.pressed.connect(_on_growth_button_pressed)
 	throw_pulse_timer.timeout.connect(_on_throw_pulse_timer_timeout)
@@ -1419,6 +1457,34 @@ func _on_game_menu_id_pressed(id: int) -> void:
 		time_speed_slider.set_value_no_signal(time_speed)
 		time_speed_value_label.text = "当前倍速: %d×" % time_speed
 		time_speed_window.popup_centered()
+	elif id == 2:
+		admin_grant_input.text = ""
+		admin_grant_window.popup_centered()
+		admin_grant_input.grab_focus()
+
+
+func _on_admin_grant_confirmed() -> void:
+	var raw := admin_grant_input.text.strip_edges()
+	if raw == "":
+		status_label.text = "请输入发放金额。"
+		admin_grant_window.popup_centered()
+		admin_grant_input.grab_focus()
+		return
+	if not raw.is_valid_int():
+		status_label.text = "金额需为整数。"
+		admin_grant_window.popup_centered()
+		admin_grant_input.grab_focus()
+		return
+	var amount := int(raw)
+	var grant := game_state.grant_coin_for_admin(amount)
+	if not grant.get("ok", false):
+		status_label.text = String(grant.get("message", "发放失败。"))
+		admin_grant_window.popup_centered()
+		admin_grant_input.grab_focus()
+		return
+	status_label.text = "管理员发放货币1：+%d" % int(grant.get("granted", amount))
+	_save_game()
+	_refresh_all()
 
 
 func _on_growth_button_pressed() -> void:
@@ -1725,7 +1791,7 @@ func _on_expedition_button_pressed(table_index: int) -> void:
 		expedition_type_option.select(0)
 	_on_expedition_type_selected(expedition_type_option.selected)
 	expedition_type_option.disabled = _is_expedition_flow_locked()
-	expedition_item_list.disabled = not expedition_waiting_result_choice
+	_set_expedition_item_list_interactive(expedition_waiting_result_choice)
 	expedition_start_button.text = "确认结果" if expedition_waiting_result_choice else "开始远征"
 	expedition_start_button.disabled = false
 	expedition_close_button.disabled = _is_expedition_flow_locked()
@@ -1806,6 +1872,11 @@ func _repopulate_expedition_item_list() -> void:
 			expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, di2)
 
 
+func _set_expedition_item_list_interactive(on: bool) -> void:
+	expedition_item_list.mouse_filter = Control.MOUSE_FILTER_STOP if on else Control.MOUSE_FILTER_IGNORE
+	expedition_item_list.focus_mode = Control.FOCUS_ALL if on else Control.FOCUS_NONE
+
+
 func _on_expedition_start_pressed() -> void:
 	var ti := expedition_table_index
 	if ti < 0 or ti >= game_state.table_count:
@@ -1838,7 +1909,7 @@ func _on_expedition_start_pressed() -> void:
 	table_expedition_timers[ti].start()
 	expedition_waiting_result_choice = false
 	expedition_type_option.disabled = true
-	expedition_item_list.disabled = true
+	_set_expedition_item_list_interactive(false)
 	expedition_item_list.clear()
 	expedition_start_button.disabled = true
 	expedition_start_button.text = "远征进行中..."
@@ -1853,7 +1924,7 @@ func _on_table_expedition_timer_timeout(table_index: int) -> void:
 		return
 	expedition_waiting_result_choice = true
 	expedition_type_option.disabled = true
-	expedition_item_list.disabled = false
+	_set_expedition_item_list_interactive(true)
 	expedition_hint_label.text = "桌%d 远征已完成：请选择结果并点击「确认结果」。" % [table_index + 1]
 	_repopulate_expedition_item_list()
 	expedition_start_button.text = "确认结果"
@@ -1914,7 +1985,7 @@ func _confirm_expedition_result() -> void:
 	expedition_pending_kind = -1
 	_reset_expedition_pending_selection()
 	expedition_type_option.disabled = false
-	expedition_item_list.disabled = true
+	_set_expedition_item_list_interactive(false)
 	expedition_start_button.text = "开始远征"
 	expedition_start_button.disabled = false
 	expedition_close_button.disabled = false
