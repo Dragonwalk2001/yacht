@@ -23,6 +23,8 @@ var growth_tree_stage: Control
 var growth_tree_root: VBoxContainer
 var growth_tree_link_layer: Control
 var growth_tree_node_prereqs: Dictionary = {}
+var growth_nodes_by_id: Dictionary = {}
+var growth_node_order: Array[String] = []
 var growth_detail_richtext: RichTextLabel
 var growth_node_detail_text: Dictionary = {}
 var growth_hovered_node_id: String = ""
@@ -71,9 +73,9 @@ var expedition_pending_synth_hi: int = -1
 
 const SAVE_PATH := "user://savegame.json"
 
-const GROWTH_DETAIL_TABLE := "增加可同时使用的骰桌数量。每桌独立掷骰、锁骰与结算，多桌收益叠加为货币1。"
-const GROWTH_DETAIL_AUTO_UNLOCK := "解锁后每张骰桌可单独开启自动：按当前自动间隔完成投掷与结算，仍播放投掷表现。"
-const GROWTH_DETAIL_AUTO_SPEED := "缩短各桌自动掷骰的等待间隔（全桌同一档位）。逻辑间隔与最短投掷动画独立；过短时排队触发，避免重复结算。"
+const GROWTH_DETAIL_TABLE := "增加可同时使用的骰桌数量。"
+const GROWTH_DETAIL_AUTO_UNLOCK := "解锁后可为每张骰桌单独开关自动投掷。"
+const GROWTH_DETAIL_AUTO_SPEED := "缩短自动投掷间隔（全桌共享等级）。"
 const GROWTH_DETAIL_PLACEHOLDER := "将鼠标移到左侧节点上查看说明。"
 const THROW_ANIMATION_SEC: float = 0.5
 const THROW_PULSE_SEC: float = 0.08
@@ -667,74 +669,112 @@ func _update_growth_tree_canvas_size() -> void:
 
 
 func _growth_tree_node_defs() -> Array:
-	return [
-		{
-			"id": "table",
-			"section": "基础成长",
-			"requires": [],
-			"callback": "_on_upgrade_table_pressed"
-		},
-		{
-			"id": "auto_unlock",
-			"section": "基础成长",
-			"requires": [],
-			"callback": "_on_upgrade_auto_unlock_pressed"
-		},
-		{
-			"id": "auto_speed",
-			"section": "基础成长",
-			"requires": ["auto_unlock"],
-			"callback": "_on_upgrade_auto_speed_pressed"
-		},
-		{
-			"id": "expedition_unlock",
-			"section": "远征科技（货币1）",
-			"requires": [],
-			"callback": "_on_tech_expedition_unlock_pressed"
-		},
-		{
-			"id": "expedition_delete",
-			"section": "远征科技（货币1）",
-			"requires": ["expedition_unlock"],
-			"callback": "_on_tech_delete_expedition_pressed"
-		},
-		{
-			"id": "expedition_synth",
-			"section": "远征科技（货币1）",
-			"requires": ["expedition_delete"],
-			"callback": "_on_tech_synth_expedition_pressed"
-		},
-		{
-			"id": "dice_cap_tech",
-			"section": "远征科技（货币1）",
-			"requires": ["expedition_unlock"],
-			"callback": "_on_tech_dice_cap_pressed"
-		},
-		{
-			"id": "exp_acquire_n",
-			"section": "远征科技（货币1）",
-			"requires": ["expedition_unlock"],
-			"callback": "_on_tech_acquire_n_pressed"
-		},
-		{
-			"id": "exp_delete_n",
-			"section": "远征科技（货币1）",
-			"requires": ["expedition_delete"],
-			"callback": "_on_tech_delete_n_pressed"
-		},
-		{
-			"id": "exp_synth_n",
-			"section": "远征科技（货币1）",
-			"requires": ["expedition_synth"],
-			"callback": "_on_tech_synth_n_pressed"
-		},
-		{
-			"id": "exp_duration",
-			"section": "远征科技（货币1）",
-			"requires": ["expedition_unlock"],
-			"callback": "_on_tech_exp_duration_pressed"
-		}
-	]
+	_ensure_growth_nodes_registered()
+	var defs: Array = []
+	for node_id: String in growth_node_order:
+		var node: TechTreeNode = growth_nodes_by_id.get(node_id, null) as TechTreeNode
+		if node != null:
+			defs.append(node.to_growth_def())
+	return defs
+
+
+func _ensure_growth_nodes_registered() -> void:
+	if not growth_nodes_by_id.is_empty():
+		return
+	var nodes: Array = []
+	nodes.append(TechTreeNode.new(
+		"table",
+		"基础成长",
+		[],
+		"_on_upgrade_table_pressed",
+		"骰桌",
+		Callable(self, "_growth_node_unlocked_table")
+	))
+	nodes.append(TechTreeNode.new(
+		"auto_unlock",
+		"基础成长",
+		[],
+		"_on_upgrade_auto_unlock_pressed",
+		"自动投掷",
+		Callable(self, "_growth_node_unlocked_auto_unlock")
+	))
+	nodes.append(TechTreeNode.new(
+		"auto_speed",
+		"基础成长",
+		["auto_unlock"],
+		"_on_upgrade_auto_speed_pressed",
+		"自动间隔",
+		Callable(self, "_growth_node_unlocked_auto_speed")
+	))
+	nodes.append(TechTreeNode.new(
+		"expedition_unlock",
+		"远征科技（货币1）",
+		[],
+		"_on_tech_expedition_unlock_pressed",
+		"远征入口",
+		Callable(self, "_growth_node_unlocked_expedition_unlock")
+	))
+	nodes.append(TechTreeNode.new(
+		"expedition_delete",
+		"远征科技（货币1）",
+		["expedition_unlock"],
+		"_on_tech_delete_expedition_pressed",
+		"删骰远征",
+		Callable(self, "_growth_node_unlocked_expedition_delete")
+	))
+	nodes.append(TechTreeNode.new(
+		"expedition_synth",
+		"远征科技（货币1）",
+		["expedition_delete"],
+		"_on_tech_synth_expedition_pressed",
+		"合成远征",
+		Callable(self, "_growth_node_unlocked_expedition_synth")
+	))
+	nodes.append(TechTreeNode.new(
+		"dice_cap_tech",
+		"远征科技（货币1）",
+		["expedition_unlock"],
+		"_on_tech_dice_cap_pressed",
+		"骰子上限",
+		Callable(self, "_growth_node_unlocked_dice_cap")
+	))
+	nodes.append(TechTreeNode.new(
+		"exp_acquire_n",
+		"远征科技（货币1）",
+		["expedition_unlock"],
+		"_on_tech_acquire_n_pressed",
+		"得骰候选",
+		Callable(self, "_growth_node_unlocked_exp_acquire_n")
+	))
+	nodes.append(TechTreeNode.new(
+		"exp_delete_n",
+		"远征科技（货币1）",
+		["expedition_delete"],
+		"_on_tech_delete_n_pressed",
+		"删骰候选",
+		Callable(self, "_growth_node_unlocked_exp_delete_n")
+	))
+	nodes.append(TechTreeNode.new(
+		"exp_synth_n",
+		"远征科技（货币1）",
+		["expedition_synth"],
+		"_on_tech_synth_n_pressed",
+		"合成候选",
+		Callable(self, "_growth_node_unlocked_exp_synth_n")
+	))
+	nodes.append(TechTreeNode.new(
+		"exp_duration",
+		"远征科技（货币1）",
+		["expedition_unlock"],
+		"_on_tech_exp_duration_pressed",
+		"远征耗时",
+		Callable(self, "_growth_node_unlocked_exp_duration")
+	))
+	for n in nodes:
+		if n is TechTreeNode:
+			var node: TechTreeNode = n as TechTreeNode
+			growth_nodes_by_id[node.id] = node
+			growth_node_order.append(node.id)
 
 
 func _resolve_growth_node_depth(node_id: String, defs_by_id: Dictionary, cache: Dictionary, visiting: Dictionary) -> int:
@@ -1060,7 +1100,12 @@ func _refresh_growth_tree() -> void:
 		auto_unlock_btn.disabled = game_state.coin_1 < auto_unlock_cost
 
 	var auto_speed_btn := upgrade_buttons.get("auto_speed") as Button
-	auto_speed_btn.text = "速满" if auto_speed_cost < 0 else "间隔"
+	if _get_growth_locked_prereq_text("auto_speed") != "":
+		auto_speed_btn.text = "需前置"
+	elif auto_speed_cost < 0:
+		auto_speed_btn.text = "速满"
+	else:
+		auto_speed_btn.text = "间隔"
 	auto_speed_btn.disabled = auto_speed_cost < 0 or game_state.coin_1 < auto_speed_cost
 
 	var exu := upgrade_buttons.get("expedition_unlock") as Button
@@ -1072,24 +1117,33 @@ func _refresh_growth_tree() -> void:
 		exu.disabled = game_state.coin_1 < GameState.TECH_COST_EXPEDITION_ENTRY
 
 	var exd := upgrade_buttons.get("expedition_delete") as Button
-	if game_state.tech_delete_expedition_unlocked:
+	if not _is_growth_node_prereq_met("expedition_delete"):
+		exd.text = "需前置"
+		exd.disabled = true
+	elif game_state.tech_delete_expedition_unlocked:
 		exd.text = "删骰开"
 		exd.disabled = true
 	else:
 		exd.text = "删骰"
-		exd.disabled = (not game_state.tech_expedition_portal_unlocked) or game_state.coin_1 < GameState.TECH_COST_DELETE_EXPEDITION
+		exd.disabled = game_state.coin_1 < GameState.TECH_COST_DELETE_EXPEDITION
 
 	var exs := upgrade_buttons.get("expedition_synth") as Button
-	if game_state.tech_synth_expedition_unlocked:
+	if not _is_growth_node_prereq_met("expedition_synth"):
+		exs.text = "需前置"
+		exs.disabled = true
+	elif game_state.tech_synth_expedition_unlocked:
 		exs.text = "合成开"
 		exs.disabled = true
 	else:
 		exs.text = "合成"
-		exs.disabled = (not game_state.tech_delete_expedition_unlocked) or game_state.coin_1 < GameState.TECH_COST_SYNTH_EXPEDITION
+		exs.disabled = game_state.coin_1 < GameState.TECH_COST_SYNTH_EXPEDITION
 
 	var dcap := upgrade_buttons.get("dice_cap_tech") as Button
 	var dcc := game_state.get_dice_cap_tech_cost_for_next_level()
-	if game_state.tech_dice_cap_level >= 2:
+	if not _is_growth_node_prereq_met("dice_cap_tech"):
+		dcap.text = "需前置"
+		dcap.disabled = true
+	elif game_state.tech_dice_cap_level >= 2:
 		dcap.text = "上限满"
 		dcap.disabled = true
 	elif game_state.tech_dice_cap_level == 1:
@@ -1101,23 +1155,39 @@ func _refresh_growth_tree() -> void:
 
 	var an := upgrade_buttons.get("exp_acquire_n") as Button
 	var ac := game_state.get_acquire_n_upgrade_cost()
-	an.text = "得N+1" if ac >= 0 else "得N满"
-	an.disabled = ac < 0 or game_state.coin_1 < ac
+	if not _is_growth_node_prereq_met("exp_acquire_n"):
+		an.text = "需前置"
+		an.disabled = true
+	else:
+		an.text = "得N+1" if ac >= 0 else "得N满"
+		an.disabled = ac < 0 or game_state.coin_1 < ac
 
 	var dn := upgrade_buttons.get("exp_delete_n") as Button
 	var del_n_cost := game_state.get_delete_n_upgrade_cost()
-	dn.text = "删N+1" if del_n_cost >= 0 else "删N满"
-	dn.disabled = del_n_cost < 0 or game_state.coin_1 < del_n_cost
+	if not _is_growth_node_prereq_met("exp_delete_n"):
+		dn.text = "需前置"
+		dn.disabled = true
+	else:
+		dn.text = "删N+1" if del_n_cost >= 0 else "删N满"
+		dn.disabled = del_n_cost < 0 or game_state.coin_1 < del_n_cost
 
 	var sn := upgrade_buttons.get("exp_synth_n") as Button
 	var sc := game_state.get_synth_n_upgrade_cost()
-	sn.text = "合N+1" if sc >= 0 else "合N满"
-	sn.disabled = sc < 0 or game_state.coin_1 < sc
+	if not _is_growth_node_prereq_met("exp_synth_n"):
+		sn.text = "需前置"
+		sn.disabled = true
+	else:
+		sn.text = "合N+1" if sc >= 0 else "合N满"
+		sn.disabled = sc < 0 or game_state.coin_1 < sc
 
 	var du := upgrade_buttons.get("exp_duration") as Button
 	var duc := game_state.get_duration_upgrade_cost()
-	du.text = "耗时-" if duc >= 0 else "耗时满"
-	du.disabled = duc < 0 or game_state.coin_1 < duc
+	if not _is_growth_node_prereq_met("exp_duration"):
+		du.text = "需前置"
+		du.disabled = true
+	else:
+		du.text = "耗时-" if duc >= 0 else "耗时满"
+		du.disabled = duc < 0 or game_state.coin_1 < duc
 
 	for t in range(GameState.MAX_TABLE_COUNT):
 		var btn := table_dice_upgrade_buttons[t] as Button
@@ -1157,67 +1227,170 @@ func _refresh_growth_detail_cache() -> void:
 		game_state.auto_speed_level,
 		game_state.get_auto_interval()
 	]
-	if auto_speed_cost >= 0:
+	var auto_speed_prereq := _get_growth_locked_prereq_text("auto_speed")
+	if auto_speed_prereq != "":
+		tt_speed += auto_speed_prereq
+	elif auto_speed_cost >= 0:
 		tt_speed += "下一档花费：%d 货币1。" % auto_speed_cost
 	else:
 		tt_speed += "已达到自动速度上限，无法再购买。"
 	growth_node_detail_text["auto_speed"] = tt_speed
 
-	var tt_exu := "解锁后每张骰桌可使用独立「远征」入口；默认可进行获得骰子远征。\n\n"
+	var tt_exu := "解锁各桌远征入口，并开放获得骰子远征。\n\n"
 	if game_state.tech_expedition_portal_unlocked:
 		tt_exu += "状态：已解锁。"
 	else:
 		tt_exu += "状态：未解锁。\n购买花费：%d 货币1。" % GameState.TECH_COST_EXPEDITION_ENTRY
 	growth_node_detail_text["expedition_unlock"] = tt_exu
 
-	var tt_exd := "解锁删骰远征：从本桌骰池移除一颗低价值骰子（至少保留1颗）。\n\n"
+	var tt_exd := "解锁删骰远征：移除本桌1颗骰子（至少保留1颗）。\n\n"
+	var exd_prereq := _get_growth_locked_prereq_text("expedition_delete")
 	if game_state.tech_delete_expedition_unlocked:
 		tt_exd += "状态：已解锁。"
 	else:
-		tt_exd += "状态：未解锁。\n购买花费：%d 货币1。\n需先解锁远征入口。" % GameState.TECH_COST_DELETE_EXPEDITION
+		tt_exd += "状态：未解锁。\n购买花费：%d 货币1。" % GameState.TECH_COST_DELETE_EXPEDITION
+		if exd_prereq != "":
+			tt_exd += "\n" + exd_prereq
 	growth_node_detail_text["expedition_delete"] = tt_exd
 
-	var tt_exs := "解锁合成远征：选择两颗骰子合并成一颗更强骰子（骰数-1）。\n\n"
+	var tt_exs := "解锁合成远征：两颗骰子合成为一颗（骰数-1）。\n\n"
+	var exs_prereq := _get_growth_locked_prereq_text("expedition_synth")
 	if game_state.tech_synth_expedition_unlocked:
 		tt_exs += "状态：已解锁。"
 	else:
-		tt_exs += "状态：未解锁。\n购买花费：%d 货币1。\n需先解锁删骰远征。" % GameState.TECH_COST_SYNTH_EXPEDITION
+		tt_exs += "状态：未解锁。\n购买花费：%d 货币1。" % GameState.TECH_COST_SYNTH_EXPEDITION
+		if exs_prereq != "":
+			tt_exs += "\n" + exs_prereq
 	growth_node_detail_text["expedition_synth"] = tt_exs
 
-	var tt_cap := "同一科技节点两级：Lv1 解锁第6颗骰子，Lv2 解锁第7颗；Lv2 花费远高于 Lv1。\n\n"
+	var tt_cap := "两级升级：Lv1 解锁第6颗骰子，Lv2 解锁第7颗。\n\n"
 	tt_cap += "当前等级：%d（单桌骰子上限 %d）。\n" % [game_state.tech_dice_cap_level, game_state.get_effective_max_dice_per_table()]
 	var nxc := game_state.get_dice_cap_tech_cost_for_next_level()
-	if nxc >= 0:
+	var cap_prereq := _get_growth_locked_prereq_text("dice_cap_tech")
+	if cap_prereq != "":
+		tt_cap += cap_prereq
+	elif nxc >= 0:
 		tt_cap += "下一级花费：%d 货币1。" % nxc
 	else:
 		tt_cap += "已满级。"
 	growth_node_detail_text["dice_cap_tech"] = tt_cap
 
-	growth_node_detail_text["exp_acquire_n"] = (
-		"提升「获得骰子」远征的候选数量（N选1）。\n\n当前N=%d，下一档花费：%s"
-		% [game_state.get_expedition_acquire_choice_n(), str(game_state.get_acquire_n_upgrade_cost()) if game_state.get_acquire_n_upgrade_cost() >= 0 else "已满"]
-	)
-	growth_node_detail_text["exp_delete_n"] = (
-		"提升「删骰」远征的候选数量（N选1）。\n\n当前N=%d，下一档花费：%s"
-		% [game_state.get_expedition_delete_choice_n(), str(game_state.get_delete_n_upgrade_cost()) if game_state.get_delete_n_upgrade_cost() >= 0 else "已满"]
-	)
-	growth_node_detail_text["exp_synth_n"] = (
-		"提升「合成」远征的候选池大小（N选2）。\n\n当前N=%d，下一档花费：%s"
-		% [game_state.get_expedition_synth_pool_n(), str(game_state.get_synth_n_upgrade_cost()) if game_state.get_synth_n_upgrade_cost() >= 0 else "已满"]
-	)
-	growth_node_detail_text["exp_duration"] = (
-		"缩短各桌远征等待时间（受时间倍速影响）。\n\n当前耗时 %.2f 秒，等级 %d，下一档花费：%s"
-		% [
-			game_state.get_expedition_duration_sec(),
-			game_state.tech_expedition_duration_level,
-			str(game_state.get_duration_upgrade_cost()) if game_state.get_duration_upgrade_cost() >= 0 else "已满"
-		]
-	)
+	var ac_cost_txt := str(game_state.get_acquire_n_upgrade_cost()) if game_state.get_acquire_n_upgrade_cost() >= 0 else "已满"
+	var ac_prereq := _get_growth_locked_prereq_text("exp_acquire_n")
+	var ac_detail := "提升获得骰子远征候选数（N选1）。\n\n当前N=%d，下一档花费：%s" % [game_state.get_expedition_acquire_choice_n(), ac_cost_txt]
+	if ac_prereq != "":
+		ac_detail += "\n" + ac_prereq
+	growth_node_detail_text["exp_acquire_n"] = ac_detail
+
+	var dn_cost_txt := str(game_state.get_delete_n_upgrade_cost()) if game_state.get_delete_n_upgrade_cost() >= 0 else "已满"
+	var dn_prereq := _get_growth_locked_prereq_text("exp_delete_n")
+	var dn_detail := "提升删骰远征候选数（N选1）。\n\n当前N=%d，下一档花费：%s" % [game_state.get_expedition_delete_choice_n(), dn_cost_txt]
+	if dn_prereq != "":
+		dn_detail += "\n" + dn_prereq
+	growth_node_detail_text["exp_delete_n"] = dn_detail
+
+	var sn_cost_txt := str(game_state.get_synth_n_upgrade_cost()) if game_state.get_synth_n_upgrade_cost() >= 0 else "已满"
+	var sn_prereq := _get_growth_locked_prereq_text("exp_synth_n")
+	var sn_detail := "提升合成远征候选池（N选2）。\n\n当前N=%d，下一档花费：%s" % [game_state.get_expedition_synth_pool_n(), sn_cost_txt]
+	if sn_prereq != "":
+		sn_detail += "\n" + sn_prereq
+	growth_node_detail_text["exp_synth_n"] = sn_detail
+
+	var du_cost_txt := str(game_state.get_duration_upgrade_cost()) if game_state.get_duration_upgrade_cost() >= 0 else "已满"
+	var du_prereq := _get_growth_locked_prereq_text("exp_duration")
+	var du_detail := "缩短远征耗时。\n\n当前耗时 %.2f 秒，等级 %d，下一档花费：%s" % [
+		game_state.get_expedition_duration_sec(),
+		game_state.tech_expedition_duration_level,
+		du_cost_txt
+	]
+	if du_prereq != "":
+		du_detail += "\n" + du_prereq
+	growth_node_detail_text["exp_duration"] = du_detail
 
 	if growth_detail_richtext == null:
 		return
 	if growth_hovered_node_id != "" and growth_node_detail_text.has(growth_hovered_node_id):
 		growth_detail_richtext.text = str(growth_node_detail_text[growth_hovered_node_id])
+
+
+func _get_growth_locked_prereq_text(node_id: String) -> String:
+	_ensure_growth_nodes_registered()
+	var reqs: Array = growth_tree_node_prereqs.get(node_id, [])
+	for req in reqs:
+		var req_id := String(req)
+		if req_id == "":
+			continue
+		if not _is_growth_node_unlocked(req_id):
+			return "需先解锁%s。" % _get_growth_node_display_name(req_id)
+	return ""
+
+
+func _is_growth_node_unlocked(node_id: String) -> bool:
+	_ensure_growth_nodes_registered()
+	if not growth_nodes_by_id.has(node_id):
+		return false
+	var node: TechTreeNode = growth_nodes_by_id.get(node_id, null) as TechTreeNode
+	return node != null and node.is_unlocked()
+
+
+func _get_growth_node_display_name(node_id: String) -> String:
+	_ensure_growth_nodes_registered()
+	if not growth_nodes_by_id.has(node_id):
+		return "前置节点"
+	var node: TechTreeNode = growth_nodes_by_id.get(node_id, null) as TechTreeNode
+	if node != null:
+		var label := String(node.display_name)
+		if label != "":
+			return label
+	return "前置节点"
+
+
+func _is_growth_node_prereq_met(node_id: String) -> bool:
+	return _get_growth_locked_prereq_text(node_id) == ""
+
+
+func _growth_node_unlocked_table() -> bool:
+	return game_state.table_count >= GameState.MAX_TABLE_COUNT
+
+
+func _growth_node_unlocked_auto_unlock() -> bool:
+	return game_state.auto_unlocked
+
+
+func _growth_node_unlocked_auto_speed() -> bool:
+	return game_state.auto_speed_level >= GameState.MAX_AUTO_SPEED_LEVEL
+
+
+func _growth_node_unlocked_expedition_unlock() -> bool:
+	return game_state.tech_expedition_portal_unlocked
+
+
+func _growth_node_unlocked_expedition_delete() -> bool:
+	return game_state.tech_delete_expedition_unlocked
+
+
+func _growth_node_unlocked_expedition_synth() -> bool:
+	return game_state.tech_synth_expedition_unlocked
+
+
+func _growth_node_unlocked_dice_cap() -> bool:
+	return game_state.tech_dice_cap_level >= 2
+
+
+func _growth_node_unlocked_exp_acquire_n() -> bool:
+	return game_state.get_acquire_n_upgrade_cost() < 0
+
+
+func _growth_node_unlocked_exp_delete_n() -> bool:
+	return game_state.get_delete_n_upgrade_cost() < 0
+
+
+func _growth_node_unlocked_exp_synth_n() -> bool:
+	return game_state.get_synth_n_upgrade_cost() < 0
+
+
+func _growth_node_unlocked_exp_duration() -> bool:
+	return game_state.get_duration_upgrade_cost() < 0
 
 
 func _refresh_score_board() -> void:
