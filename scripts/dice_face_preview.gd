@@ -33,8 +33,12 @@ func apply_die(d: Variant) -> void:
 	var die := d as _DieT
 	var rarity := clampi(int(die.rarity), 0, 2)
 	var cell := Vector2(40, 40)
+	var display_faces: Array[int] = []
 	for i in range(6):
-		var v := clampi(int(die.faces[i]), 1, 6)
+		display_faces.append(clampi(int(die.faces[i]), 1, 6))
+	display_faces.sort()
+	for i in range(6):
+		var v := display_faces[i]
 		var wrap := PanelContainer.new()
 		wrap.custom_minimum_size = cell
 		var visual := die_visual(v, rarity, 0.55)
