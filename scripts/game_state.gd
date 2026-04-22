@@ -6,6 +6,11 @@ const _Die := preload("res://scripts/die_definition.gd")
 
 const SAVE_DATA_VERSION_V2: int = 2
 const SAVE_DATA_VERSION_V3: int = 3
+const SAVE_DATA_VERSION_V4: int = 4
+const SAVE_DATA_VERSION_V5: int = 5
+const SAVE_DATA_VERSION_V6: int = 6
+
+const TABLE_DICE_POOL_BASE: int = 20
 
 const MAX_ROLLS_PER_TURN: int = 3
 const MIN_DICE_COUNT: int = 1
@@ -60,7 +65,8 @@ var tech_expedition_delete_n_level: int = 0
 var tech_expedition_synth_n_level: int = 0
 var tech_expedition_duration_level: int = 0
 
-var table_die_defs: Array = []
+var table_die_pool: Array = []
+var table_active_pool_indices: Array = []
 
 var table_dice_counts: Array = []
 var table_rolls_used: Array = []
@@ -102,7 +108,8 @@ func _reset_all_tables() -> void:
 	table_holds.clear()
 	per_table_auto_enabled.clear()
 	table_auto_staging.clear()
-	table_die_defs.clear()
+	table_die_pool.clear()
+	table_active_pool_indices.clear()
 	for _i in range(table_count):
 		table_dice_counts.append(MIN_DICE_COUNT)
 		table_rolls_used.append(0)
@@ -110,40 +117,155 @@ func _reset_all_tables() -> void:
 		table_holds.append(DiceLogic.create_default_holds(MIN_DICE_COUNT))
 		per_table_auto_enabled.append(false)
 		table_auto_staging.append([])
-		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
+		table_die_pool.append(_create_full_standard_pool())
+		table_active_pool_indices.append([])
+	for i in range(table_count):
+		_resample_active_pool_indices(i)
+		var dc0 := get_table_dice_count(i)
+		var defs0 := _get_die_defs_row_no_resample(i)
+		table_dice_values[i] = DiceLogic.roll_fresh_dice_with_definitions(defs0)
+		table_holds[i] = DiceLogic.create_default_holds(dc0)
 
 
-func _create_default_die_row(count: int) -> Array:
+func _create_empty_die_pool() -> Array:
 	var row: Array = []
-	for _j in range(maxi(1, count)):
+	row.resize(TABLE_DICE_POOL_BASE)
+	for i in range(TABLE_DICE_POOL_BASE):
+		row[i] = null
+	return row
+
+
+func _create_full_standard_pool() -> Array:
+	var row: Array = []
+	for _j in range(TABLE_DICE_POOL_BASE):
 		row.append(_Die.create_standard())
 	return row
+
+
+func _ensure_pool_all_dice(table_index: int) -> void:
+	if not _ensure_table_index(table_index):
+		return
+	var pool: Array = table_die_pool[table_index]
+	for s in range(pool.size()):
+		if pool[s] == null or not (pool[s] is _Die):
+			pool[s] = _Die.create_standard()
+	if pool.is_empty():
+		pool.append(_Die.create_standard())
+
+
+func get_table_die_pool_size(table_index: int) -> int:
+	if not _ensure_table_index(table_index):
+		return 0
+	return table_die_pool[table_index].size()
 
 
 func get_effective_max_dice_per_table() -> int:
 	return clampi(BASE_DICE_CAP_BEFORE_TECH + tech_dice_cap_level, MIN_DICE_COUNT, MAX_DICE_COUNT)
 
 
+func get_pool_filled_indices(table_index: int) -> Array[int]:
+	var out: Array[int] = []
+	if not _ensure_table_index(table_index):
+		return out
+	var pool: Array = table_die_pool[table_index]
+	for i in range(pool.size()):
+		if pool[i] is _Die:
+			out.append(i)
+	return out
+
+
+func get_pool_filled_count(table_index: int) -> int:
+	return get_pool_filled_indices(table_index).size()
+
+
+func get_die_at_pool_slot(table_index: int, pool_slot: int) -> Variant:
+	if not _ensure_table_index(table_index):
+		return null
+	var pool: Array = table_die_pool[table_index]
+	if pool_slot < 0 or pool_slot >= pool.size():
+		return null
+	return pool[pool_slot]
+
+
+func get_active_pool_indices(table_index: int) -> Array[int]:
+	if not _ensure_table_index(table_index):
+		return [] as Array[int]
+	var raw: Array = table_active_pool_indices[table_index]
+	var out: Array[int] = []
+	for v in raw:
+		out.append(int(v))
+	return out
+
+
 func _get_die_defs_row(table_index: int) -> Array:
 	if not _ensure_table_index(table_index):
 		return []
-	_ensure_die_defs_row_size(table_index)
-	return table_die_defs[table_index] as Array
+	_ensure_active_pool_indices(table_index)
+	var pool: Array = table_die_pool[table_index]
+	var idxs: Array = table_active_pool_indices[table_index]
+	var out: Array = []
+	for slot_v in idxs:
+		var slot := int(slot_v)
+		if slot >= 0 and slot < pool.size() and pool[slot] is _Die:
+			out.append(pool[slot])
+		else:
+			out.append(_Die.create_standard())
+	return out
 
 
-func _ensure_die_defs_row_size(table_index: int) -> void:
+func _get_die_defs_row_no_resample(table_index: int) -> Array:
+	if not _ensure_table_index(table_index):
+		return []
+	var pool: Array = table_die_pool[table_index]
+	var idxs: Array = table_active_pool_indices[table_index]
+	var out: Array = []
+	for slot_v in idxs:
+		var slot := int(slot_v)
+		if slot >= 0 and slot < pool.size() and pool[slot] is _Die:
+			out.append(pool[slot])
+		else:
+			out.append(_Die.create_standard())
+	return out
+
+
+func _ensure_active_pool_indices(table_index: int) -> void:
 	if not _ensure_table_index(table_index):
 		return
+	while table_active_pool_indices.size() < table_count:
+		table_active_pool_indices.append([])
+	while table_active_pool_indices.size() > table_count:
+		table_active_pool_indices.pop_back()
 	var dc := get_table_dice_count(table_index)
-	while table_die_defs.size() < table_count:
-		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
-	while table_die_defs.size() > table_count:
-		table_die_defs.pop_back()
-	var row: Array = table_die_defs[table_index]
-	while row.size() < dc:
-		row.append(_Die.create_standard())
-	while row.size() > dc:
-		row.pop_back()
+	var filled := get_pool_filled_indices(table_index)
+	var need_resample := false
+	var idxs: Array = table_active_pool_indices[table_index]
+	if idxs.size() != dc:
+		need_resample = true
+	else:
+		var pool: Array = table_die_pool[table_index]
+		for slot_v in idxs:
+			var s := int(slot_v)
+			if s < 0 or s >= pool.size() or not (pool[s] is _Die):
+				need_resample = true
+				break
+	if need_resample:
+		_resample_active_pool_indices(table_index)
+	elif dc > filled.size():
+		_resample_active_pool_indices(table_index)
+
+
+func _resample_active_pool_indices(table_index: int) -> void:
+	var filled := get_pool_filled_indices(table_index)
+	var pool_copy: Array[int] = filled.duplicate()
+	pool_copy.shuffle()
+	var dc := get_table_dice_count(table_index)
+	var n := mini(dc, pool_copy.size())
+	n = maxi(MIN_DICE_COUNT, n)
+	n = mini(n, pool_copy.size())
+	var active: Array = []
+	for j in range(n):
+		active.append(pool_copy[j])
+	table_active_pool_indices[table_index] = active
 
 
 func get_expedition_acquire_choice_n() -> int:
@@ -294,13 +416,13 @@ func generate_acquire_candidates() -> Array:
 
 
 func get_random_delete_candidate_indices(table_index: int) -> Array[int]:
-	var dc := get_table_dice_count(table_index)
-	if dc <= 1:
+	if get_table_dice_count(table_index) <= MIN_DICE_COUNT:
 		return []
-	var n := mini(get_expedition_delete_choice_n(), dc)
-	var pool: Array[int] = []
-	for i in range(dc):
-		pool.append(i)
+	var filled := get_pool_filled_indices(table_index)
+	if filled.is_empty():
+		return []
+	var n := mini(get_expedition_delete_choice_n(), filled.size())
+	var pool: Array[int] = filled.duplicate()
 	pool.shuffle()
 	var out: Array[int] = []
 	for j in range(n):
@@ -310,13 +432,13 @@ func get_random_delete_candidate_indices(table_index: int) -> Array[int]:
 
 
 func get_random_synth_candidate_indices(table_index: int) -> Array[int]:
-	var dc := get_table_dice_count(table_index)
-	if dc < 2:
+	if get_table_dice_count(table_index) < 2:
 		return []
-	var want := mini(get_expedition_synth_pool_n(), dc)
-	var pool: Array[int] = []
-	for i in range(dc):
-		pool.append(i)
+	var filled := get_pool_filled_indices(table_index)
+	if filled.size() < 2:
+		return []
+	var want := mini(get_expedition_synth_pool_n(), filled.size())
+	var pool: Array[int] = filled.duplicate()
 	pool.shuffle()
 	var out: Array[int] = []
 	for j in range(want):
@@ -330,88 +452,64 @@ func apply_expedition_acquire(table_index: int, die: _Die) -> Dictionary:
 		return {"ok": false, "message": "无效骰桌。"}
 	if not tech_expedition_portal_unlocked:
 		return {"ok": false, "message": "远征未解锁。"}
-	var dc := get_table_dice_count(table_index)
-	if dc >= get_effective_max_dice_per_table():
-		return {"ok": false, "message": "已达本桌骰子上限，无法再通过远征获得。"}
 	coin_1 = maxi(0, coin_1)
-	table_dice_counts[table_index] = dc + 1
-	_ensure_die_defs_row_size(table_index)
-	var row: Array = table_die_defs[table_index]
-	if row.size() > dc:
-		row[dc] = die.duplicate_die()
-	var vals: Array = table_dice_values[table_index]
-	vals.append(1)
-	table_dice_values[table_index] = vals
-	var holds: Array = table_holds[table_index]
-	holds.append(false)
-	table_holds[table_index] = holds
+	var pool: Array = table_die_pool[table_index]
+	pool.append(die.duplicate_die())
+	var n0 := int(table_dice_counts[table_index])
+	if n0 < get_effective_max_dice_per_table():
+		table_dice_counts[table_index] = n0 + 1
 	_clamp_all_table_rows()
+	_resample_active_pool_indices(table_index)
 	return {"ok": true}
 
 
-func apply_expedition_delete(table_index: int, die_index: int) -> Dictionary:
+func apply_expedition_delete(table_index: int, pool_slot: int) -> Dictionary:
 	if not _ensure_table_index(table_index):
 		return {"ok": false, "message": "无效骰桌。"}
 	if not tech_delete_expedition_unlocked:
 		return {"ok": false, "message": "删骰远征未解锁。"}
-	var dc := get_table_dice_count(table_index)
-	if dc <= MIN_DICE_COUNT:
-		return {"ok": false, "message": "至少保留1颗骰子。"}
-	if die_index < 0 or die_index >= dc:
+	if get_table_dice_count(table_index) <= MIN_DICE_COUNT:
+		return {"ok": false, "message": "至少保留1颗上场骰子。"}
+	var pool: Array = table_die_pool[table_index]
+	if pool_slot < 0 or pool_slot >= pool.size():
 		return {"ok": false, "message": "无效的删除目标。"}
-	table_dice_counts[table_index] = dc - 1
-	var row: Array = table_die_defs[table_index]
-	if die_index >= 0 and die_index < row.size():
-		row.remove_at(die_index)
-	var vals: Array = table_dice_values[table_index]
-	if die_index >= 0 and die_index < vals.size():
-		vals.remove_at(die_index)
-	table_dice_values[table_index] = vals
-	var holds: Array = table_holds[table_index]
-	if die_index >= 0 and die_index < holds.size():
-		holds.remove_at(die_index)
-	table_holds[table_index] = holds
+	if not (pool[pool_slot] is _Die):
+		return {"ok": false, "message": "无效的删除目标。"}
+	pool.remove_at(pool_slot)
+	table_dice_counts[table_index] = int(table_dice_counts[table_index]) - 1
 	var st: Array = table_auto_staging[table_index]
 	if st.size() > 0:
 		table_auto_staging[table_index] = []
 	_clamp_all_table_rows()
+	_resample_active_pool_indices(table_index)
 	return {"ok": true}
 
 
-func apply_expedition_synth(table_index: int, idx_a: int, idx_b: int) -> Dictionary:
+func apply_expedition_synth(table_index: int, pool_slot_a: int, pool_slot_b: int) -> Dictionary:
 	if not _ensure_table_index(table_index):
 		return {"ok": false, "message": "无效骰桌。"}
 	if not tech_synth_expedition_unlocked:
 		return {"ok": false, "message": "合成远征未解锁。"}
-	var dc := get_table_dice_count(table_index)
-	if dc < 2:
-		return {"ok": false, "message": "至少需要2颗骰子才能合成。"}
-	if idx_a == idx_b:
+	if get_table_dice_count(table_index) < 2:
+		return {"ok": false, "message": "至少需要2颗上场骰子才能合成。"}
+	if pool_slot_a == pool_slot_b:
 		return {"ok": false, "message": "请选择两颗不同的骰子。"}
-	if idx_a < 0 or idx_a >= dc or idx_b < 0 or idx_b >= dc:
+	var pool: Array = table_die_pool[table_index]
+	if pool_slot_a < 0 or pool_slot_a >= pool.size() or pool_slot_b < 0 or pool_slot_b >= pool.size():
 		return {"ok": false, "message": "无效的下标。"}
-	var row: Array = _get_die_defs_row(table_index)
-	var da: _Die = row[idx_a] as _Die
-	var db: _Die = row[idx_b] as _Die
+	if not (pool[pool_slot_a] is _Die) or not (pool[pool_slot_b] is _Die):
+		return {"ok": false, "message": "无效的下标。"}
+	var da: _Die = pool[pool_slot_a] as _Die
+	var db: _Die = pool[pool_slot_b] as _Die
 	var merged := _Die.merge(da, db)
-	var hi := maxi(idx_a, idx_b)
-	var lo := mini(idx_a, idx_b)
-	row.remove_at(hi)
-	row.remove_at(lo)
-	row.insert(lo, merged)
-	table_dice_counts[table_index] = dc - 1
-	var vals: Array = table_dice_values[table_index]
-	vals.remove_at(hi)
-	vals.remove_at(lo)
-	vals.insert(lo, 1)
-	table_dice_values[table_index] = vals
-	var holds: Array = table_holds[table_index]
-	holds.remove_at(hi)
-	holds.remove_at(lo)
-	holds.insert(lo, false)
-	table_holds[table_index] = holds
+	var hi := maxi(pool_slot_a, pool_slot_b)
+	var lo := mini(pool_slot_a, pool_slot_b)
+	pool[lo] = merged
+	pool.remove_at(hi)
+	table_dice_counts[table_index] = int(table_dice_counts[table_index]) - 1
 	table_auto_staging[table_index] = []
 	_clamp_all_table_rows()
+	_resample_active_pool_indices(table_index)
 	return {"ok": true}
 
 
@@ -459,7 +557,7 @@ func roll_manual(table_index: int) -> Dictionary:
 		return {"ok": false, "message": "本回合重投次数已用完，请先结算。"}
 	var values: Array = table_dice_values[table_index]
 	var holds: Array = table_holds[table_index]
-	var defs := _get_die_defs_row(table_index)
+	var defs := _get_die_defs_row_no_resample(table_index)
 	var next_values := DiceLogic.roll_dice_with_definitions(values, holds, defs)
 	dice_face_stats.record_rerolled_only(holds, next_values)
 	table_dice_values[table_index] = next_values
@@ -533,10 +631,12 @@ func finalize_auto_throw_for_table(table_index: int) -> Dictionary:
 func get_dice_upgrade_cost(table_index: int) -> int:
 	if not _ensure_table_index(table_index):
 		return -1
-	var dc := get_table_dice_count(table_index)
-	if dc >= get_effective_max_dice_per_table():
+	var n := get_table_dice_count(table_index)
+	if n >= get_effective_max_dice_per_table():
 		return -1
-	return int(35 * pow(1.75, dc - MIN_DICE_COUNT))
+	if get_pool_filled_count(table_index) < n + 1:
+		return -1
+	return int(35 * pow(1.75, n - MIN_DICE_COUNT))
 
 
 func can_upgrade_dice_on_table(table_index: int) -> bool:
@@ -549,24 +649,23 @@ func upgrade_dice_on_table(table_index: int) -> Dictionary:
 	if not _ensure_table_index(table_index):
 		return {"ok": false, "message": "无效骰桌。"}
 	if cost <= 0:
-		return {"ok": false, "message": "该桌骰子数量已达上限。"}
+		if get_table_dice_count(table_index) >= get_effective_max_dice_per_table():
+			return {"ok": false, "message": "该桌上场骰子数已达上限。"}
+		return {"ok": false, "message": "骰池骰子不足，无法增加上场数。"}
 	if coin_1 < cost:
 		return {"ok": false, "message": "货币1不足。"}
 	coin_1 -= cost
 	table_dice_counts[table_index] = int(table_dice_counts[table_index]) + 1
-	_ensure_die_defs_row_size(table_index)
-	var def_row: Array = table_die_defs[table_index]
-	def_row.append(_Die.create_standard())
 	var in_active_turn := int(table_rolls_used[table_index]) > 0
 	var auto_staging: Array = table_auto_staging[table_index]
 	var has_pending_auto := auto_staging.size() > 0
+	_clamp_all_table_rows()
 	if not in_active_turn and not has_pending_auto:
-		var row: Array = table_dice_values[table_index]
-		row.append(1)
-		table_dice_values[table_index] = row
-		var holds: Array = table_holds[table_index]
-		holds.append(false)
-		table_holds[table_index] = holds
+		_resample_active_pool_indices(table_index)
+		var dc := get_table_dice_count(table_index)
+		var defs := _get_die_defs_row_no_resample(table_index)
+		table_dice_values[table_index] = DiceLogic.roll_fresh_dice_with_definitions(defs)
+		table_holds[table_index] = DiceLogic.create_default_holds(dc)
 	return {
 		"ok": true,
 		"takes_effect_next_turn": in_active_turn or has_pending_auto
@@ -598,7 +697,13 @@ func upgrade_table_count() -> Dictionary:
 	table_holds.append(DiceLogic.create_default_holds(MIN_DICE_COUNT))
 	per_table_auto_enabled.append(auto_unlocked)
 	table_auto_staging.append([])
-	table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
+	table_die_pool.append(_create_full_standard_pool())
+	table_active_pool_indices.append([])
+	var ti_new := table_count - 1
+	_resample_active_pool_indices(ti_new)
+	var dcn := get_table_dice_count(ti_new)
+	table_dice_values[ti_new] = DiceLogic.roll_fresh_dice_with_definitions(_get_die_defs_row_no_resample(ti_new))
+	table_holds[ti_new] = DiceLogic.create_default_holds(dcn)
 	return {"ok": true}
 
 
@@ -692,6 +797,7 @@ func estimate_income_per_second() -> float:
 func _reset_table_turn(table_index: int) -> void:
 	if not _ensure_table_index(table_index):
 		return
+	_resample_active_pool_indices(table_index)
 	var dc := get_table_dice_count(table_index)
 	table_rolls_used[table_index] = 0
 	var defs := _get_die_defs_row(table_index)
@@ -701,7 +807,8 @@ func _reset_table_turn(table_index: int) -> void:
 
 
 func _build_auto_cycle_dice_for_table(table_index: int) -> Array[int]:
-	var defs := _get_die_defs_row(table_index)
+	_resample_active_pool_indices(table_index)
+	var defs := _get_die_defs_row_no_resample(table_index)
 	var dice := DiceLogic.roll_fresh_dice_with_definitions(defs)
 	dice_face_stats.record_all_faces(dice)
 	for _i in range(MAX_ROLLS_PER_TURN - 1):
@@ -761,7 +868,7 @@ func _record_income_event(amount: int) -> void:
 
 func to_save_data() -> Dictionary:
 	return {
-		"version": SAVE_DATA_VERSION_V3,
+		"version": SAVE_DATA_VERSION_V6,
 		"coin_1": coin_1,
 		"total_coin_earned": total_coin_earned,
 		"table_count": table_count,
@@ -788,7 +895,8 @@ func to_save_data() -> Dictionary:
 		"tech_expedition_delete_n_level": tech_expedition_delete_n_level,
 		"tech_expedition_synth_n_level": tech_expedition_synth_n_level,
 		"tech_expedition_duration_level": tech_expedition_duration_level,
-		"table_die_defs": _die_defs_nested_to_save()
+		"table_die_pool": _die_pool_to_save(),
+		"table_active_pool_indices": _active_indices_to_save()
 	}
 
 
@@ -834,7 +942,10 @@ func load_from_save_data(data: Dictionary) -> bool:
 		tech_expedition_delete_n_level = maxi(0, int(data.get("tech_expedition_delete_n_level", 0)))
 		tech_expedition_synth_n_level = maxi(0, int(data.get("tech_expedition_synth_n_level", 0)))
 		tech_expedition_duration_level = clampi(int(data.get("tech_expedition_duration_level", 0)), 0, EXPEDITION_MAX_DURATION_LEVEL)
-		_load_die_defs_from_save(data.get("table_die_defs", []))
+		if ver >= SAVE_DATA_VERSION_V4:
+			_load_v4_pool_payload(data)
+		else:
+			_migrate_v3_table_die_defs_to_pool(data.get("table_die_defs", []))
 	else:
 		tech_expedition_portal_unlocked = false
 		tech_delete_expedition_unlocked = false
@@ -844,7 +955,7 @@ func load_from_save_data(data: Dictionary) -> bool:
 		tech_expedition_synth_n_level = 0
 		tech_expedition_duration_level = 0
 		_infer_tech_dice_cap_from_loaded_counts()
-		_migrate_die_defs_from_counts()
+		_migrate_v3_table_die_defs_to_pool([])
 
 	_clamp_all_table_rows()
 
@@ -883,7 +994,8 @@ func _migrate_v1_to_v2(data: Dictionary) -> void:
 	table_holds.clear()
 	per_table_auto_enabled.clear()
 	table_auto_staging.clear()
-	table_die_defs.clear()
+	table_die_pool.clear()
+	table_active_pool_indices.clear()
 	for i in range(table_count):
 		table_dice_counts.append(legacy_dice)
 		table_rolls_used.append(legacy_rolls if i == 0 else 0)
@@ -895,7 +1007,8 @@ func _migrate_v1_to_v2(data: Dictionary) -> void:
 		else:
 			table_dice_values.append(DiceLogic.create_default_dice(legacy_dice))
 			table_holds.append(DiceLogic.create_default_holds(legacy_dice))
-		table_die_defs.append(_create_default_die_row(legacy_dice))
+		table_die_pool.append(_create_full_standard_pool())
+		table_active_pool_indices.append([])
 
 
 func _normalize_table_arrays() -> void:
@@ -915,10 +1028,12 @@ func _normalize_table_arrays() -> void:
 		table_auto_staging.append([])
 	while table_auto_staging.size() > table_count:
 		table_auto_staging.pop_back()
-	while table_die_defs.size() < table_count:
-		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
-	while table_die_defs.size() > table_count:
-		table_die_defs.pop_back()
+	while table_die_pool.size() < table_count:
+		table_die_pool.append(_create_full_standard_pool())
+		table_active_pool_indices.append([])
+	while table_die_pool.size() > table_count:
+		table_die_pool.pop_back()
+		table_active_pool_indices.pop_back()
 
 
 func _infer_tech_dice_cap_from_loaded_counts() -> void:
@@ -933,42 +1048,97 @@ func _infer_tech_dice_cap_from_loaded_counts() -> void:
 		tech_dice_cap_level = 0
 
 
-func _migrate_die_defs_from_counts() -> void:
-	table_die_defs.clear()
-	for i in range(table_count):
-		var dc := clampi(int(table_dice_counts[i]), MIN_DICE_COUNT, MAX_DICE_COUNT)
-		table_die_defs.append(_create_default_die_row(dc))
-
-
-func _load_die_defs_from_save(raw: Variant) -> void:
-	table_die_defs.clear()
-	if not (raw is Array):
-		_migrate_die_defs_from_counts()
+func _migrate_v3_table_die_defs_to_pool(raw: Variant) -> void:
+	table_die_pool.clear()
+	table_active_pool_indices.clear()
+	if not (raw is Array) or (raw as Array).is_empty():
+		for _i in range(table_count):
+			table_die_pool.append(_create_full_standard_pool())
+			table_active_pool_indices.append([])
 		return
 	var outer: Array = raw
 	for i in range(table_count):
-		var row: Array = []
+		var p := _create_empty_die_pool()
 		if i < outer.size() and outer[i] is Array:
+			var s := 0
 			for cell in outer[i]:
-				if cell is Dictionary:
-					row.append(_Die.from_dict(cell))
-		while row.size() < MIN_DICE_COUNT:
-			row.append(_Die.create_standard())
-		table_die_defs.append(row)
-	while table_die_defs.size() < table_count:
-		table_die_defs.append(_create_default_die_row(MIN_DICE_COUNT))
-	while table_die_defs.size() > table_count:
-		table_die_defs.pop_back()
+				if cell is Dictionary and s < TABLE_DICE_POOL_BASE:
+					p[s] = _Die.from_dict(cell)
+					s += 1
+		for _t in range(TABLE_DICE_POOL_BASE):
+			if p[_t] == null or not (p[_t] is _Die):
+				p[_t] = _Die.create_standard()
+		table_die_pool.append(p)
+	for i in range(table_count):
+		var act: Array = []
+		var dc := clampi(int(table_dice_counts[i]), MIN_DICE_COUNT, MAX_DICE_COUNT)
+		var filled := get_pool_filled_indices(i)
+		for j in range(mini(dc, filled.size())):
+			act.append(filled[j])
+		if act.is_empty() and filled.size() > 0:
+			act.append(filled[0])
+		table_active_pool_indices.append(act)
 
 
-func _die_defs_nested_to_save() -> Array:
+func get_pool_filled_indices_from_array(pool: Array) -> Array[int]:
+	var out: Array[int] = []
+	for i in range(pool.size()):
+		if pool[i] is _Die:
+			out.append(i)
+	return out
+
+
+func _load_v4_pool_payload(data: Dictionary) -> void:
+	table_die_pool.clear()
+	table_active_pool_indices.clear()
+	var pools_raw: Variant = data.get("table_die_pool", [])
+	var act_raw: Variant = data.get("table_active_pool_indices", [])
+	for i in range(table_count):
+		var p: Array = []
+		if pools_raw is Array and i < pools_raw.size() and pools_raw[i] is Array:
+			var cells: Array = pools_raw[i]
+			for s in range(cells.size()):
+				var c: Variant = cells[s]
+				if c is Dictionary:
+					p.append(_Die.from_dict(c))
+				else:
+					p.append(null)
+		while p.size() < TABLE_DICE_POOL_BASE:
+			p.append(null)
+		for _t in range(p.size()):
+			if p[_t] == null or not (p[_t] is _Die):
+				p[_t] = _Die.create_standard()
+		table_die_pool.append(p)
+		var act: Array = []
+		var mx := maxi(0, p.size() - 1)
+		if act_raw is Array and i < act_raw.size() and act_raw[i] is Array:
+			for v in act_raw[i]:
+				act.append(clampi(int(v), 0, mx))
+		table_active_pool_indices.append(act)
+
+
+func _die_pool_to_save() -> Array:
 	var out: Array = []
 	for i in range(table_count):
 		var inner: Array = []
-		var row: Array = table_die_defs[i] if i < table_die_defs.size() else []
-		for d in row:
-			if d is _Die:
-				inner.append((d as _Die).to_dict())
+		var row: Array = table_die_pool[i] if i < table_die_pool.size() else _create_empty_die_pool()
+		for s in range(row.size()):
+			var c: Variant = row[s]
+			if c is _Die:
+				inner.append((c as _Die).to_dict())
+			else:
+				inner.append(null)
+		out.append(inner)
+	return out
+
+
+func _active_indices_to_save() -> Array:
+	var out: Array = []
+	for i in range(table_count):
+		var inner: Array = []
+		if i < table_active_pool_indices.size():
+			for v in table_active_pool_indices[i]:
+				inner.append(int(v))
 		out.append(inner)
 	return out
 
@@ -976,11 +1146,15 @@ func _die_defs_nested_to_save() -> Array:
 func _clamp_all_table_rows() -> void:
 	_normalize_table_arrays()
 	for i in range(table_count):
+		_ensure_pool_all_dice(i)
+		var filled := get_pool_filled_count(i)
 		var em := get_effective_max_dice_per_table()
 		var dc := clampi(int(table_dice_counts[i]), MIN_DICE_COUNT, em)
+		dc = mini(dc, filled)
+		dc = maxi(MIN_DICE_COUNT, dc)
 		table_dice_counts[i] = dc
 		table_rolls_used[i] = clampi(int(table_rolls_used[i]), 0, MAX_ROLLS_PER_TURN)
-		_ensure_die_defs_row_size(i)
+		_ensure_active_pool_indices(i)
 		table_dice_values[i] = _clone_dice_row(table_dice_values[i], dc)
 		table_holds[i] = _normalize_holds_row(table_holds[i], dc)
 		var st: Array = table_auto_staging[i]

@@ -3,6 +3,9 @@ extends Control
 
 const _TimeSpeedSettings := preload("res://scripts/time_speed_settings.gd")
 const _Die := preload("res://scripts/die_definition.gd")
+const _DiceFacePreview := preload("res://scripts/dice_face_preview.gd")
+const _GrowthTreeStyle := preload("res://scripts/growth_tree_style.gd")
+const _ExpeditionGate := preload("res://scripts/expedition_gate.gd")
 
 @onready var status_label: Label = $Margin/VBox/TopRow/LeftColumn/StatusLabel
 @onready var turn_label: Label = $Margin/VBox/TopRow/LeftColumn/TurnLabel
@@ -45,6 +48,7 @@ var table_roll_buttons: Array[Button] = []
 var table_settle_buttons: Array[Button] = []
 var table_auto_buttons: Array[Button] = []
 var table_dice_upgrade_buttons: Array[Button] = []
+var table_pool_buttons: Array[Button] = []
 var table_expedition_buttons: Array[Button] = []
 var table_expedition_timers: Array[Timer] = []
 var table_throw_timers: Array[Timer] = []
@@ -53,6 +57,12 @@ var table_is_throwing: Array[bool] = []
 var table_throw_sources: Array[String] = []
 var table_throw_visuals: Array = []
 var table_queued_auto: Array[int] = []
+
+var pool_browser_window: Window
+var pool_browser_table_index: int = -1
+var pool_browser_list: ItemList
+var pool_browser_preview: _DiceFacePreview
+var pool_browser_subtitle: Label
 
 var expedition_window: Window
 var expedition_table_index: int = -1
@@ -72,6 +82,7 @@ var expedition_pending_acquire_idx: int = -1
 var expedition_pending_delete_die_idx: int = -1
 var expedition_pending_synth_lo: int = -1
 var expedition_pending_synth_hi: int = -1
+var expedition_face_preview: _DiceFacePreview
 
 const SAVE_PATH := "user://savegame.json"
 
@@ -98,6 +109,7 @@ func _ready() -> void:
 	_init_admin_grant_window()
 	_init_growth_window()
 	_init_expedition_window()
+	_init_pool_browser_window()
 	_init_time_speed_window()
 	_init_throw_tracking_arrays()
 	_create_per_table_timers()
@@ -148,7 +160,7 @@ func _apply_table_panel_density() -> void:
 		inner.add_theme_constant_override("separation", sep_inner)
 		var row := inner.get_child(1) as HBoxContainer
 		row.add_theme_constant_override("separation", maxi(2, sep_inner))
-		var cbox := inner.get_child(2) as HBoxContainer
+		var cbox := inner.get_child(3) as HBoxContainer
 		cbox.add_theme_constant_override("separation", maxi(4, sep_inner + 2))
 		for d in range(GameState.MAX_DICE_COUNT):
 			(table_die_buttons[t][d] as Button).custom_minimum_size = Vector2(die, die)
@@ -275,7 +287,7 @@ func _init_growth_window() -> void:
 	tree_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tree_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tree_panel.size_flags_stretch_ratio = 7.0
-	var tree_style := _growth_tree_node_stylebox()
+	var tree_style := _GrowthTreeStyle.node_stylebox()
 	tree_style.bg_color = Color(0.08, 0.09, 0.11, 1.0)
 	tree_panel.add_theme_stylebox_override("panel", tree_style)
 	body.add_child(tree_panel)
@@ -321,7 +333,7 @@ func _init_growth_window() -> void:
 	detail_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	detail_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail_panel.size_flags_stretch_ratio = 3.0
-	var detail_style := _growth_tree_node_stylebox()
+	var detail_style := _GrowthTreeStyle.node_stylebox()
 	detail_style.bg_color = Color(0.09, 0.1, 0.12, 1.0)
 	detail_panel.add_theme_stylebox_override("panel", detail_style)
 	body.add_child(detail_panel)
@@ -359,8 +371,8 @@ func _init_growth_window() -> void:
 func _init_expedition_window() -> void:
 	expedition_window = Window.new()
 	expedition_window.title = "远征"
-	expedition_window.size = Vector2i(520, 420)
-	expedition_window.min_size = Vector2i(440, 360)
+	expedition_window.size = Vector2i(640, 440)
+	expedition_window.min_size = Vector2i(520, 380)
 	expedition_window.transient = true
 	expedition_window.exclusive = true
 	expedition_window.visible = false
@@ -397,12 +409,30 @@ func _init_expedition_window() -> void:
 	expedition_type_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	expedition_type_option.item_selected.connect(_on_expedition_type_selected)
 	type_row.add_child(expedition_type_option)
+	var mid := HBoxContainer.new()
+	mid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	mid.add_theme_constant_override("separation", 10)
+	col.add_child(mid)
+	var list_side := VBoxContainer.new()
+	list_side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_side.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	mid.add_child(list_side)
 	expedition_item_list = ItemList.new()
 	expedition_item_list.custom_minimum_size = Vector2(0, 160)
 	expedition_item_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	expedition_item_list.allow_reselect = true
 	expedition_item_list.select_mode = ItemList.SELECT_MULTI
-	col.add_child(expedition_item_list)
+	expedition_item_list.item_selected.connect(_on_expedition_item_list_selected)
+	list_side.add_child(expedition_item_list)
+	var prev_side := VBoxContainer.new()
+	prev_side.custom_minimum_size = Vector2(210, 0)
+	var prev_title := Label.new()
+	prev_title.text = "六面（稀有度着色）"
+	prev_side.add_child(prev_title)
+	expedition_face_preview = _DiceFacePreview.new()
+	expedition_face_preview.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	prev_side.add_child(expedition_face_preview)
+	mid.add_child(prev_side)
 	expedition_start_button = Button.new()
 	expedition_start_button.text = "开始远征"
 	expedition_start_button.pressed.connect(_on_expedition_start_pressed)
@@ -417,6 +447,103 @@ func _init_expedition_window() -> void:
 	)
 	col.add_child(expedition_close_button)
 	add_child(expedition_window)
+
+
+func _init_pool_browser_window() -> void:
+	pool_browser_window = Window.new()
+	pool_browser_window.title = "骰池"
+	pool_browser_window.size = Vector2i(560, 420)
+	pool_browser_window.min_size = Vector2i(480, 360)
+	pool_browser_window.transient = true
+	pool_browser_window.exclusive = false
+	pool_browser_window.visible = false
+	pool_browser_window.close_requested.connect(func() -> void:
+		pool_browser_window.hide()
+	)
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	pool_browser_window.add_child(margin)
+	var col := VBoxContainer.new()
+	col.set_anchors_preset(Control.PRESET_FULL_RECT)
+	col.add_theme_constant_override("separation", 8)
+	margin.add_child(col)
+	pool_browser_subtitle = Label.new()
+	pool_browser_subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(pool_browser_subtitle)
+	var mid := HBoxContainer.new()
+	mid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	mid.add_theme_constant_override("separation", 10)
+	col.add_child(mid)
+	var list_side := VBoxContainer.new()
+	list_side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_side.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	mid.add_child(list_side)
+	pool_browser_list = ItemList.new()
+	pool_browser_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	pool_browser_list.custom_minimum_size = Vector2(240, 220)
+	pool_browser_list.item_selected.connect(_on_pool_browser_item_selected)
+	list_side.add_child(pool_browser_list)
+	var prev_side := VBoxContainer.new()
+	prev_side.custom_minimum_size = Vector2(230, 0)
+	var prev_lbl := Label.new()
+	prev_lbl.text = "六面"
+	prev_side.add_child(prev_lbl)
+	pool_browser_preview = _DiceFacePreview.new()
+	pool_browser_preview.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	prev_side.add_child(pool_browser_preview)
+	mid.add_child(prev_side)
+	add_child(pool_browser_window)
+
+
+func _on_pool_view_pressed(table_index: int) -> void:
+	if table_index < 0 or table_index >= game_state.table_count:
+		return
+	pool_browser_table_index = table_index
+	pool_browser_window.title = "桌%d 骰池" % [table_index + 1]
+	var n := game_state.get_table_dice_count(table_index)
+	pool_browser_subtitle.text = "共%d颗；本回合随机上场%d颗（★）。点选槽位查看六面。" % [game_state.get_table_die_pool_size(table_index), n]
+	_refresh_pool_browser_list(false)
+	pool_browser_window.popup_centered()
+
+
+func _refresh_pool_browser_list(preserve_sel: bool) -> void:
+	var ti := pool_browser_table_index
+	if ti < 0 or ti >= game_state.table_count:
+		return
+	var prev := 0
+	if preserve_sel and pool_browser_list.get_selected_items().size() > 0:
+		prev = int(pool_browser_list.get_selected_items()[0])
+	var active := game_state.get_active_pool_indices(ti)
+	pool_browser_list.clear()
+	for s in range(game_state.get_table_die_pool_size(ti)):
+		var d: Variant = game_state.get_die_at_pool_slot(ti, s)
+		var prefix := "★ " if active.has(s) else ""
+		var summ := ""
+		if d is _Die:
+			summ = (d as _Die).summary_label()
+		pool_browser_list.add_item("%s槽%d  %s" % [prefix, s + 1, summ])
+	if pool_browser_list.item_count > 0:
+		var pick := clampi(prev if preserve_sel else 0, 0, pool_browser_list.item_count - 1)
+		pool_browser_list.select(pick)
+		_on_pool_browser_item_selected(pick)
+
+
+func _on_pool_browser_item_selected(index: int) -> void:
+	if pool_browser_table_index < 0 or index < 0:
+		return
+	pool_browser_preview.apply_die(game_state.get_die_at_pool_slot(pool_browser_table_index, index))
+
+
+func _refresh_pool_browser_if_visible() -> void:
+	if pool_browser_window == null or not pool_browser_window.visible:
+		return
+	if pool_browser_table_index < 0 or pool_browser_table_index >= game_state.table_count:
+		return
+	_refresh_pool_browser_list(true)
 
 
 func _init_time_speed_window() -> void:
@@ -473,33 +600,13 @@ func _on_time_speed_slider_changed(v: float) -> void:
 	_save_game()
 
 
-func _growth_tree_node_stylebox() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.11, 0.12, 0.14, 1.0)
-	sb.set_border_width_all(1)
-	sb.border_color = Color(0.32, 0.35, 0.4, 1.0)
-	sb.set_corner_radius_all(8)
-	sb.set_content_margin_all(10)
-	return sb
-
-
-func _growth_tree_node_stylebox_compact() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.11, 0.12, 0.14, 1.0)
-	sb.set_border_width_all(1)
-	sb.border_color = Color(0.3, 0.33, 0.38, 1.0)
-	sb.set_corner_radius_all(4)
-	sb.set_content_margin_all(4)
-	return sb
-
-
 func _create_tech_tree_node(parent: Node, node_id: String, callback: Callable) -> Button:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	panel.custom_minimum_size = Vector2(40, 40)
 	panel.position = Vector2.ZERO
 	panel.size = Vector2(40, 40)
-	panel.add_theme_stylebox_override("panel", _growth_tree_node_stylebox_compact())
+	panel.add_theme_stylebox_override("panel", _GrowthTreeStyle.node_stylebox_compact())
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel.mouse_entered.connect(_on_growth_node_hover.bind(node_id))
 	parent.add_child(panel)
@@ -962,6 +1069,7 @@ func _build_table_panels() -> void:
 	table_settle_buttons.clear()
 	table_auto_buttons.clear()
 	table_dice_upgrade_buttons.clear()
+	table_pool_buttons.clear()
 	table_expedition_buttons.clear()
 	tables_grid.columns = 2
 	var die_size := Vector2(48, 48)
@@ -988,6 +1096,16 @@ func _build_table_panels() -> void:
 			row.add_child(die_button)
 			buttons_for_table.append(die_button)
 		table_die_buttons.append(buttons_for_table)
+		var pool_row := HBoxContainer.new()
+		var pvb := Button.new()
+		pvb.text = "骰池（%d）" % GameState.TABLE_DICE_POOL_BASE
+		var ti_pool := table_index
+		pvb.pressed.connect(func() -> void:
+			_on_pool_view_pressed(ti_pool)
+		)
+		pool_row.add_child(pvb)
+		table_pool_buttons.append(pvb)
+		inner.add_child(pool_row)
 		var ctrl := HBoxContainer.new()
 		ctrl.add_theme_constant_override("separation", 6)
 		inner.add_child(ctrl)
@@ -1048,14 +1166,12 @@ func _refresh_all() -> void:
 	_refresh_growth_tree()
 	_refresh_score_board()
 	_update_all_table_buttons()
+	_refresh_pool_browser_if_visible()
 
 
 func _refresh_turn_labels() -> void:
-	var sum_dice := 0
-	for i in range(game_state.table_count):
-		sum_dice += game_state.get_table_dice_count(i)
-	turn_label.text = "骰桌:%d/%d · 骰子合计:%d（每桌独立操作与自动计时）" % [
-		game_state.table_count, GameState.MAX_TABLE_COUNT, sum_dice
+	turn_label.text = "骰桌:%d/%d · 开局池%d颗/桌可扩张（每桌独立操作与自动计时）" % [
+		game_state.table_count, GameState.MAX_TABLE_COUNT, GameState.TABLE_DICE_POOL_BASE
 	]
 	rolls_label.text = "各桌独立操作；骰桌区可上下滚动。"
 
@@ -1066,7 +1182,12 @@ func _refresh_table_infos() -> void:
 			continue
 		var dc := game_state.get_table_dice_count(t)
 		var ru := int(game_state.table_rolls_used[t])
-		table_info_labels[t].text = "桌%d · 投%d/%d · 骰%d个" % [t + 1, ru, GameState.MAX_ROLLS_PER_TURN, dc]
+		var psz := game_state.get_table_die_pool_size(t)
+		table_info_labels[t].text = "桌%d · 投%d/%d · 上场%d · 池%d" % [t + 1, ru, GameState.MAX_ROLLS_PER_TURN, dc, psz]
+		if t < table_pool_buttons.size():
+			var pb: Button = table_pool_buttons[t] as Button
+			if pb != null:
+				pb.text = "骰池（%d）" % psz
 
 
 func _refresh_dice() -> void:
@@ -1109,10 +1230,12 @@ func _refresh_dice() -> void:
 				value,
 				"已锁定" if held else "可点锁定"
 			]
-			if table_index < game_state.table_die_defs.size():
-				var drow: Array = game_state.table_die_defs[table_index]
-				if die_index < drow.size() and drow[die_index] is _Die:
-					tip += "  " + (drow[die_index] as _Die).summary_label()
+			var ap: Array[int] = game_state.get_active_pool_indices(table_index)
+			if die_index < ap.size():
+				var ps := int(ap[die_index])
+				var dslot: Variant = game_state.get_die_at_pool_slot(table_index, ps)
+				if dslot is _Die:
+					tip += "  池位%d %s" % [ps + 1, (dslot as _Die).summary_label()]
 			die_button.tooltip_text = tip
 			var ru := int(game_state.table_rolls_used[table_index])
 			die_button.disabled = table_is_throwing[table_index] or auto_on or ru == 0
@@ -1301,8 +1424,8 @@ func _refresh_growth_detail_cache() -> void:
 			tt_exs += "\n" + exs_prereq
 	growth_node_detail_text["expedition_synth"] = tt_exs
 
-	var tt_cap := "两级升级：Lv1 解锁第6颗骰子，Lv2 解锁第7颗。\n\n"
-	tt_cap += "当前等级：%d（单桌骰子上限 %d）。\n" % [game_state.tech_dice_cap_level, game_state.get_effective_max_dice_per_table()]
+	var tt_cap := "两级升级：Lv1 解锁单桌第6颗上场骰子，Lv2 解锁第7颗。\n\n"
+	tt_cap += "当前等级：%d（单桌上场骰子数上限 %d）。\n" % [game_state.tech_dice_cap_level, game_state.get_effective_max_dice_per_table()]
 	var nxc := game_state.get_dice_cap_tech_cost_for_next_level()
 	var cap_prereq := _get_growth_locked_prereq_text("dice_cap_tech")
 	if cap_prereq != "":
@@ -1634,7 +1757,7 @@ func _on_upgrade_dice_on_table_pressed(table_index: int) -> void:
 		if bool(result.get("takes_effect_next_turn", false)):
 			status_label.text = "桌%d 骰子已升级；新骰子将从下一次投掷生效。" % [table_index + 1]
 		else:
-			status_label.text = "桌%d 骰子数=%d" % [table_index + 1, game_state.get_table_dice_count(table_index)]
+			status_label.text = "桌%d 上场骰子=%d" % [table_index + 1, game_state.get_table_dice_count(table_index)]
 	else:
 		status_label.text = String(result["message"])
 	if result["ok"]:
@@ -1796,6 +1919,7 @@ func _on_expedition_button_pressed(table_index: int) -> void:
 	expedition_start_button.disabled = false
 	expedition_close_button.disabled = _is_expedition_flow_locked()
 	expedition_window.popup_centered()
+	_update_expedition_face_preview()
 
 
 func _expedition_selected_type() -> int:
@@ -1854,22 +1978,57 @@ func _repopulate_expedition_item_list() -> void:
 		expedition_delete_indices = game_state.get_random_delete_candidate_indices(ti)
 		for j in range(expedition_delete_indices.size()):
 			var di := expedition_delete_indices[j]
-			var row: Array = game_state.table_die_defs[ti]
 			var summ := ""
-			if di < row.size() and row[di] is _Die:
-				summ = (row[di] as _Die).summary_label()
-			expedition_item_list.add_item("删除 骰位%d: %s" % [di + 1, summ])
+			var ddel: Variant = game_state.get_die_at_pool_slot(ti, di)
+			if ddel is _Die:
+				summ = (ddel as _Die).summary_label()
+			expedition_item_list.add_item("删除 池位%d: %s" % [di + 1, summ])
 			expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, di)
 	elif ty == 2:
 		expedition_synth_indices = game_state.get_random_synth_candidate_indices(ti)
 		for j in range(expedition_synth_indices.size()):
 			var di2 := expedition_synth_indices[j]
-			var row2: Array = game_state.table_die_defs[ti]
 			var summ2 := ""
-			if di2 < row2.size() and row2[di2] is _Die:
-				summ2 = (row2[di2] as _Die).summary_label()
-			expedition_item_list.add_item("骰位%d: %s" % [di2 + 1, summ2])
+			var d2: Variant = game_state.get_die_at_pool_slot(ti, di2)
+			if d2 is _Die:
+				summ2 = (d2 as _Die).summary_label()
+			expedition_item_list.add_item("池位%d: %s" % [di2 + 1, summ2])
 			expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, di2)
+	if expedition_item_list.item_count > 0:
+		expedition_item_list.select(0)
+	_update_expedition_face_preview()
+
+
+func _on_expedition_item_list_selected(_index: int) -> void:
+	_update_expedition_face_preview()
+
+
+func _update_expedition_face_preview() -> void:
+	if expedition_face_preview == null:
+		return
+	if not expedition_waiting_result_choice:
+		expedition_face_preview.apply_die(null)
+		return
+	var ty := expedition_pending_kind
+	if ty == 0:
+		var sel := expedition_item_list.get_selected_items()
+		if sel.is_empty():
+			expedition_face_preview.apply_die(null)
+			return
+		var ci := int(expedition_item_list.get_item_metadata(sel[0]))
+		if ci >= 0 and ci < expedition_acquire_candidates.size():
+			expedition_face_preview.apply_die(expedition_acquire_candidates[ci])
+		else:
+			expedition_face_preview.apply_die(null)
+	elif ty == 1 or ty == 2:
+		var sel2 := expedition_item_list.get_selected_items()
+		if sel2.is_empty():
+			expedition_face_preview.apply_die(null)
+			return
+		var pool_i := int(expedition_item_list.get_item_metadata(sel2[0]))
+		expedition_face_preview.apply_die(game_state.get_die_at_pool_slot(expedition_table_index, pool_i))
+	else:
+		expedition_face_preview.apply_die(null)
 
 
 func _set_expedition_item_list_interactive(on: bool) -> void:
@@ -1888,19 +2047,15 @@ func _on_expedition_start_pressed() -> void:
 		return
 	var ty := _expedition_selected_type()
 	_reset_expedition_pending_selection()
-	if ty == 0:
-		if game_state.get_table_dice_count(ti) >= game_state.get_effective_max_dice_per_table():
-			status_label.text = "已达骰子上限，无法再通过远征获得骰子。"
-			return
-	elif ty == 1:
-		if game_state.get_table_dice_count(ti) <= 1:
-			status_label.text = "至少需要2颗骰子才能进行删骰远征。"
+	if ty == 1:
+		if game_state.get_table_dice_count(ti) <= GameState.MIN_DICE_COUNT:
+			status_label.text = "上场至少2颗骰子时才能删骰远征。"
 			return
 	elif ty == 2:
 		if game_state.get_table_dice_count(ti) < 2:
-			status_label.text = "至少需要2颗骰子才能进行合成远征。"
+			status_label.text = "上场至少2颗骰子时才能合成远征。"
 			return
-	else:
+	elif ty != 0:
 		status_label.text = "没有可用的远征类型。"
 		return
 	expedition_pending_kind = ty
@@ -2107,14 +2262,11 @@ func _on_table_throw_timer_timeout(table_index: int) -> void:
 
 
 func _active_expedition_table_index() -> int:
-	for i in range(table_expedition_timers.size()):
-		if table_expedition_timers[i].time_left > 0.0:
-			return i
-	return -1
+	return _ExpeditionGate.active_expedition_table_index(table_expedition_timers)
 
 
 func _is_expedition_flow_locked() -> bool:
-	return expedition_waiting_result_choice or _active_expedition_table_index() >= 0
+	return _ExpeditionGate.is_flow_locked(expedition_waiting_result_choice, table_expedition_timers)
 
 
 func _reset_expedition_pending_selection() -> void:
