@@ -10,6 +10,7 @@ var pool_browser_table_index: int = -1
 var pool_browser_list: ItemList
 var pool_browser_preview: DiceFacePreview
 var pool_browser_subtitle: Label
+var _die_rarity_styles: Dictionary = {}
 
 
 func _init(p_host: Node) -> void:
@@ -215,6 +216,7 @@ func refresh_dice() -> void:
 		if not root.visible:
 			continue
 		var dc := gs.get_table_dice_count(table_index)
+		var ap: Array[int] = gs.get_active_pool_indices(table_index)
 		for die_index in range(GameState.MAX_DICE_COUNT):
 			var die_button := _host.table_die_buttons[table_index][die_index] as Button
 			var visible_for_count := die_index < dc
@@ -236,6 +238,15 @@ func refresh_dice() -> void:
 					held = bool(hrow[die_index])
 			die_button.icon = tex.get(value, tex[1])
 			die_button.text = ""
+			var rarity := 0
+			if die_index < ap.size():
+				var slot_idx := int(ap[die_index])
+				var dslot: Variant = gs.get_die_at_pool_slot(table_index, slot_idx)
+				if dslot is _Die:
+					rarity = clampi(int((dslot as _Die).rarity), 0, 2)
+			var rarity_style := _get_rarity_button_stylebox(rarity)
+			for style_name in ["normal", "hover", "pressed", "focus", "disabled"]:
+				die_button.add_theme_stylebox_override(style_name, rarity_style)
 			var auto_on := gs.is_table_auto_enabled(table_index)
 			die_button.set_pressed_no_signal(not _host.table_is_throwing[table_index] and held)
 			if _host.table_is_throwing[table_index]:
@@ -248,7 +259,6 @@ func refresh_dice() -> void:
 				value,
 				"已锁定" if held else "可点锁定"
 			]
-			var ap: Array[int] = gs.get_active_pool_indices(table_index)
 			if die_index < ap.size():
 				var ps := int(ap[die_index])
 				var dslot: Variant = gs.get_die_at_pool_slot(table_index, ps)
@@ -257,3 +267,23 @@ func refresh_dice() -> void:
 			die_button.tooltip_text = tip
 			var ru := int(gs.table_rolls_used[table_index])
 			die_button.disabled = _host.table_is_throwing[table_index] or auto_on or ru == 0
+
+
+func _get_rarity_button_stylebox(rarity: int) -> StyleBoxFlat:
+	var key := clampi(rarity, 0, 2)
+	if _die_rarity_styles.has(key):
+		return _die_rarity_styles[key] as StyleBoxFlat
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.06, 0.07, 0.09, 0.28)
+	sb.set_corner_radius_all(6)
+	sb.set_border_width_all(2)
+	match key:
+		1:
+			sb.border_color = Color(0.45, 0.78, 0.92, 0.95)
+		2:
+			sb.border_color = Color(0.95, 0.72, 0.28, 0.98)
+		_:
+			sb.border_color = Color(0.28, 0.31, 0.36, 0.75)
+	sb.set_content_margin_all(3)
+	_die_rarity_styles[key] = sb
+	return sb
