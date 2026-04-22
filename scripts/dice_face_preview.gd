@@ -11,6 +11,10 @@ const FACE_TEXTURES := {
 	5: preload("res://assets/dice/die_5.svg"),
 	6: preload("res://assets/dice/die_6.svg")
 }
+const DIE_STYLE_CORNER_RADIUS := 6
+const DIE_STYLE_BORDER_WIDTH := 2
+const DIE_STYLE_CONTENT_MARGIN := 3
+const DIE_BG_COLOR := Color(0.06, 0.07, 0.09, 1.0)
 
 
 func _ready() -> void:
@@ -33,9 +37,10 @@ func apply_die(d: Variant) -> void:
 		var v := clampi(int(die.faces[i]), 1, 6)
 		var wrap := PanelContainer.new()
 		wrap.custom_minimum_size = cell
-		wrap.add_theme_stylebox_override("panel", _rarity_cell_stylebox(rarity))
+		var visual := die_visual(v, rarity, 0.55)
+		wrap.add_theme_stylebox_override("panel", visual["style"] as StyleBoxFlat)
 		var tr := TextureRect.new()
-		tr.texture = FACE_TEXTURES.get(v, FACE_TEXTURES[1])
+		tr.texture = visual["texture"] as Texture2D
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -44,17 +49,29 @@ func apply_die(d: Variant) -> void:
 		add_child(wrap)
 
 
-static func _rarity_cell_stylebox(rarity: int) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.06, 0.07, 0.09, 0.55)
-	sb.set_corner_radius_all(6)
-	sb.set_border_width_all(2)
-	match rarity:
+static func rarity_border_color(rarity: int) -> Color:
+	match clampi(rarity, 0, 2):
 		1:
-			sb.border_color = Color(0.45, 0.78, 0.92, 0.95)
+			return Color(0.45, 0.78, 0.92, 0.95)
 		2:
-			sb.border_color = Color(0.95, 0.72, 0.28, 0.98)
+			return Color(0.95, 0.72, 0.28, 0.98)
 		_:
-			sb.border_color = Color(0.28, 0.31, 0.36, 0.75)
-	sb.set_content_margin_all(3)
+			return Color(0.28, 0.31, 0.36, 0.75)
+
+
+static func die_visual(face_value: int, rarity: int, bg_alpha: float = 0.55) -> Dictionary:
+	var v := clampi(face_value, 1, 6)
+	return {
+		"texture": FACE_TEXTURES.get(v, FACE_TEXTURES[1]),
+		"style": rarity_cell_stylebox(rarity, bg_alpha)
+	}
+
+
+static func rarity_cell_stylebox(rarity: int, bg_alpha: float = 0.55) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(DIE_BG_COLOR.r, DIE_BG_COLOR.g, DIE_BG_COLOR.b, clampf(bg_alpha, 0.0, 1.0))
+	sb.set_corner_radius_all(DIE_STYLE_CORNER_RADIUS)
+	sb.set_border_width_all(DIE_STYLE_BORDER_WIDTH)
+	sb.border_color = rarity_border_color(rarity)
+	sb.set_content_margin_all(DIE_STYLE_CONTENT_MARGIN)
 	return sb

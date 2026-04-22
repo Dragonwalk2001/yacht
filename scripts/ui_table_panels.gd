@@ -10,7 +10,6 @@ var pool_browser_table_index: int = -1
 var pool_browser_list: ItemList
 var pool_browser_preview: DiceFacePreview
 var pool_browser_subtitle: Label
-var _die_rarity_styles: Dictionary = {}
 
 
 func _init(p_host: Node) -> void:
@@ -244,7 +243,9 @@ func refresh_dice() -> void:
 				var dslot: Variant = gs.get_die_at_pool_slot(table_index, slot_idx)
 				if dslot is _Die:
 					rarity = clampi(int((dslot as _Die).rarity), 0, 2)
-			var rarity_style := _get_rarity_button_stylebox(rarity)
+			var visual := DiceFacePreview.die_visual(value, rarity, 0.28)
+			die_button.icon = visual["texture"] as Texture2D
+			var rarity_style := visual["style"] as StyleBoxFlat
 			for style_name in ["normal", "hover", "pressed", "focus", "disabled"]:
 				die_button.add_theme_stylebox_override(style_name, rarity_style)
 			var auto_on := gs.is_table_auto_enabled(table_index)
@@ -267,23 +268,3 @@ func refresh_dice() -> void:
 			die_button.tooltip_text = tip
 			var ru := int(gs.table_rolls_used[table_index])
 			die_button.disabled = _host.table_is_throwing[table_index] or auto_on or ru == 0
-
-
-func _get_rarity_button_stylebox(rarity: int) -> StyleBoxFlat:
-	var key := clampi(rarity, 0, 2)
-	if _die_rarity_styles.has(key):
-		return _die_rarity_styles[key] as StyleBoxFlat
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.06, 0.07, 0.09, 0.28)
-	sb.set_corner_radius_all(6)
-	sb.set_border_width_all(2)
-	match key:
-		1:
-			sb.border_color = Color(0.45, 0.78, 0.92, 0.95)
-		2:
-			sb.border_color = Color(0.95, 0.72, 0.28, 0.98)
-		_:
-			sb.border_color = Color(0.28, 0.31, 0.36, 0.75)
-	sb.set_content_margin_all(3)
-	_die_rarity_styles[key] = sb
-	return sb
