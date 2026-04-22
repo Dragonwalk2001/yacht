@@ -601,9 +601,9 @@ func _refresh_growth_node_button_progress_text() -> void:
 func _create_tech_tree_node(parent: Node, node_id: String, callback: Callable) -> Button:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	panel.custom_minimum_size = Vector2(74, 56)
+	panel.custom_minimum_size = Vector2(58, 44)
 	panel.position = Vector2.ZERO
-	panel.size = Vector2(74, 56)
+	panel.size = Vector2(58, 44)
 	panel.add_theme_stylebox_override("panel", _GrowthTreeStyle.node_stylebox_compact())
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel.mouse_entered.connect(_on_growth_node_hover.bind(node_id))
@@ -612,7 +612,7 @@ func _create_tech_tree_node(parent: Node, node_id: String, callback: Callable) -
 	var button := Button.new()
 	button.clip_text = false
 	button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
-	button.custom_minimum_size = Vector2(70, 52)
+	button.custom_minimum_size = Vector2(54, 40)
 	button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	button.add_theme_font_size_override("font_size", 10)
 	button.alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -704,7 +704,7 @@ func _build_growth_tree_nodes() -> void:
 
 func _create_growth_tree_row_layer(width_px: int) -> Control:
 	var row := Control.new()
-	row.custom_minimum_size = Vector2(maxi(200, width_px), 74)
+	row.custom_minimum_size = Vector2(maxi(200, width_px), 64)
 	row.size = row.custom_minimum_size
 	return row
 
@@ -712,14 +712,14 @@ func _create_growth_tree_row_layer(width_px: int) -> Control:
 func _create_growth_tree_node_holder(node_id: String, slot_x: int, node_def: Dictionary) -> Control:
 	var holder := Control.new()
 	holder.position = Vector2(slot_x, 0)
-	holder.custom_minimum_size = Vector2(74, 56)
+	holder.custom_minimum_size = Vector2(58, 44)
 	holder.size = holder.custom_minimum_size
 	var callback_name := String(node_def.get("callback", ""))
 	var callback := Callable()
 	if callback_name != "":
 		callback = Callable(_host, callback_name)
 	var btn := _create_tech_tree_node(holder, node_id, callback)
-	btn.custom_minimum_size = Vector2(70, 52)
+	btn.custom_minimum_size = Vector2(54, 40)
 	_host.upgrade_buttons[node_id] = btn
 	return holder
 
@@ -769,7 +769,7 @@ func _build_growth_tree_section_x_slots(section_node_ids: Array[String], childre
 		if not x_cache.has(node_id):
 			_compute_growth_tree_x_slot(node_id, children, x_cache, leaf_state, {})
 	var pixel_slots: Dictionary = {}
-	var slot_step := 82.0
+	var slot_step := 70.0
 	for node_id in section_node_ids:
 		var unit_x := float(x_cache.get(node_id, 0.0))
 		pixel_slots[node_id] = int(round(unit_x * slot_step))
