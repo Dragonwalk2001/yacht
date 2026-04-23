@@ -289,6 +289,16 @@ func get_expedition_synth_pool_n() -> int:
 	return clampi(EXPEDITION_SYNTH_BASE_N + tech_expedition_synth_n_level, EXPEDITION_SYNTH_BASE_N, EXPEDITION_SYNTH_MAX_N)
 
 
+func get_synth_expedition_required_dice_count() -> int:
+	return get_effective_max_dice_per_table() + 1
+
+
+func can_start_synth_expedition(table_index: int) -> bool:
+	if not _ensure_table_index(table_index):
+		return false
+	return get_pool_filled_count(table_index) >= get_synth_expedition_required_dice_count()
+
+
 func get_expedition_duration_sec() -> float:
 	var lv := clampi(tech_expedition_duration_level, 0, EXPEDITION_MAX_DURATION_LEVEL)
 	var t := EXPEDITION_BASE_DURATION_SEC - float(lv) * EXPEDITION_DURATION_STEP_SEC
@@ -425,10 +435,10 @@ func generate_acquire_candidates() -> Array:
 
 
 func get_random_delete_candidate_indices(table_index: int) -> Array[int]:
-	if get_table_dice_count(table_index) <= MIN_DICE_COUNT:
-		return []
 	var filled := get_pool_filled_indices(table_index)
 	if filled.is_empty():
+		return []
+	if filled.size() <= get_table_dice_count(table_index):
 		return []
 	var n := mini(get_expedition_delete_choice_n(), filled.size())
 	var pool: Array[int] = filled.duplicate()
@@ -477,15 +487,14 @@ func apply_expedition_delete(table_index: int, pool_slot: int) -> Dictionary:
 		return {"ok": false, "message": "无效骰桌。"}
 	if not tech_delete_expedition_unlocked:
 		return {"ok": false, "message": "删骰远征未解锁。"}
-	if get_table_dice_count(table_index) <= MIN_DICE_COUNT:
-		return {"ok": false, "message": "至少保留1颗上场骰子。"}
+	if get_pool_filled_count(table_index) <= get_table_dice_count(table_index):
+		return {"ok": false, "message": "骰池数量不足，不能影响当前上场骰子。"}
 	var pool: Array = table_die_pool[table_index]
 	if pool_slot < 0 or pool_slot >= pool.size():
 		return {"ok": false, "message": "无效的删除目标。"}
 	if not (pool[pool_slot] is _Die):
 		return {"ok": false, "message": "无效的删除目标。"}
 	pool.remove_at(pool_slot)
-	table_dice_counts[table_index] = int(table_dice_counts[table_index]) - 1
 	var st: Array = table_auto_staging[table_index]
 	if st.size() > 0:
 		table_auto_staging[table_index] = []
@@ -499,6 +508,8 @@ func apply_expedition_synth(table_index: int, pool_slot_a: int, pool_slot_b: int
 		return {"ok": false, "message": "无效骰桌。"}
 	if not tech_synth_expedition_unlocked:
 		return {"ok": false, "message": "合成远征未解锁。"}
+	if not can_start_synth_expedition(table_index):
+		return {"ok": false, "message": "合成远征需要该桌骰池至少达到上限+1。"}
 	if get_table_dice_count(table_index) < 2:
 		return {"ok": false, "message": "至少需要2颗上场骰子才能合成。"}
 	if pool_slot_a == pool_slot_b:

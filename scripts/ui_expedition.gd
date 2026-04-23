@@ -25,6 +25,13 @@ var expedition_pending_delete_die_idx: int = -1
 var expedition_pending_synth_lo: int = -1
 var expedition_pending_synth_hi: int = -1
 var expedition_face_preview: DiceFacePreview
+var table_pending_kind: Array[int] = []
+var table_waiting_result: Array[bool] = []
+var table_acquire_candidates: Array = []
+var table_delete_indices: Array = []
+var table_synth_indices: Array = []
+var expedition_synth_selected_slots: Array[int] = []
+var _synth_repainting: bool = false
 
 
 func _init(p_host: Node) -> void:
@@ -40,10 +47,8 @@ func init_expedition_window() -> void:
 	expedition_window.exclusive = true
 	expedition_window.visible = false
 	expedition_window.close_requested.connect(func() -> void:
-		if _is_expedition_flow_locked():
-			_host.status_label.text = "请先完成当前远征流程。"
-			return
 		expedition_window.hide()
+		_host._refresh_all()
 	)
 	var margin := MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -103,10 +108,8 @@ func init_expedition_window() -> void:
 	expedition_close_button = Button.new()
 	expedition_close_button.text = "关闭"
 	expedition_close_button.pressed.connect(func() -> void:
-		if _is_expedition_flow_locked():
-			_host.status_label.text = "请先完成当前远征流程。"
-			return
 		expedition_window.hide()
+		_host._refresh_all()
 	)
 	col.add_child(expedition_close_button)
 	_host.add_child(expedition_window)
@@ -117,7 +120,7 @@ func active_expedition_table_index() -> int:
 
 
 func _is_expedition_flow_locked() -> bool:
-	return _ExpeditionGate.is_flow_locked(expedition_waiting_result_choice, _host.table_expedition_timers)
+	return false
 
 
 func _reset_expedition_pending_selection() -> void:
@@ -127,24 +130,59 @@ func _reset_expedition_pending_selection() -> void:
 	expedition_pending_synth_hi = -1
 
 
+func _ensure_expedition_rows() -> void:
+	var tc: int = int(_host.game_state.table_count)
+	while table_pending_kind.size() < tc:
+		table_pending_kind.append(-1)
+		table_waiting_result.append(false)
+		table_acquire_candidates.append([])
+		table_delete_indices.append([])
+		table_synth_indices.append([])
+	while table_pending_kind.size() > tc:
+		table_pending_kind.pop_back()
+		table_waiting_result.pop_back()
+		table_acquire_candidates.pop_back()
+		table_delete_indices.pop_back()
+		table_synth_indices.pop_back()
+
+
+func _clear_table_expedition_state(table_index: int) -> void:
+	if table_index < 0 or table_index >= table_pending_kind.size():
+		return
+	table_pending_kind[table_index] = -1
+	table_waiting_result[table_index] = false
+	table_acquire_candidates[table_index] = []
+	table_delete_indices[table_index] = []
+	table_synth_indices[table_index] = []
+
+
+func _sync_window_state_flags() -> void:
+	var ti := expedition_table_index
+	if ti < 0 or ti >= table_pending_kind.size():
+		expedition_pending_kind = -1
+		expedition_waiting_result_choice = false
+		return
+	expedition_pending_kind = table_pending_kind[ti]
+	expedition_waiting_result_choice = bool(table_waiting_result[ti])
+
+
+func is_table_waiting_result(table_index: int) -> bool:
+	_ensure_expedition_rows()
+	if table_index < 0 or table_index >= table_waiting_result.size():
+		return false
+	return bool(table_waiting_result[table_index])
+
+
 func on_expedition_button_pressed(table_index: int) -> void:
 	var gs: GameState = _host.game_state
+	_ensure_expedition_rows()
 	if table_index >= gs.table_count:
 		return
 	if not gs.tech_expedition_portal_unlocked:
 		_host.status_label.text = "请先在成长树解锁远征入口。"
 		return
-	if expedition_waiting_result_choice and expedition_table_index != table_index:
-		_host.status_label.text = "请先完成当前远征的结果选择。"
-		return
-	var active_exp_table := active_expedition_table_index()
-	if active_exp_table >= 0 and active_exp_table != table_index:
-		_host.status_label.text = "已有其他骰桌远征进行中。"
-		return
-	if table_index < _host.table_expedition_timers.size() and _host.table_expedition_timers[table_index].time_left > 0.0:
-		_host.status_label.text = "该桌远征进行中。"
-		return
 	expedition_table_index = table_index
+	_sync_window_state_flags()
 	expedition_income_before = gs.estimate_income_per_second()
 	expedition_income_label.text = "远征前估算收益/秒: %.1f" % expedition_income_before
 	expedition_hint_label.text = "桌%d：先选择远征类型并开始。远征结束后再选择结果并确认。" % [table_index + 1]
@@ -157,11 +195,26 @@ func on_expedition_button_pressed(table_index: int) -> void:
 	elif expedition_type_option.item_count > 0:
 		expedition_type_option.select(0)
 	_on_expedition_type_selected(expedition_type_option.selected)
-	expedition_type_option.disabled = _is_expedition_flow_locked()
-	_set_expedition_item_list_interactive(expedition_waiting_result_choice)
-	expedition_start_button.text = "确认结果" if expedition_waiting_result_choice else "开始远征"
-	expedition_start_button.disabled = false
-	expedition_close_button.disabled = _is_expedition_flow_locked()
+	var running: bool = table_index < _host.table_expedition_timers.size() and _host.table_expedition_timers[table_index].time_left > 0.0
+	if running:
+		expedition_type_option.disabled = true
+		_set_expedition_item_list_interactive(false)
+		expedition_item_list.clear()
+		expedition_start_button.text = "远征进行中..."
+		expedition_start_button.disabled = true
+		expedition_hint_label.text = "桌%d 远征进行中，结束后可确认结果。" % [table_index + 1]
+	elif expedition_waiting_result_choice:
+		expedition_type_option.disabled = true
+		_set_expedition_item_list_interactive(true)
+		expedition_start_button.text = "确认结果"
+		expedition_start_button.disabled = false
+		expedition_hint_label.text = "桌%d 远征已完成：请选择结果并点击「确认结果」。" % [table_index + 1]
+	else:
+		expedition_type_option.disabled = false
+		_set_expedition_item_list_interactive(false)
+		expedition_start_button.text = "开始远征"
+		expedition_start_button.disabled = false
+	expedition_close_button.disabled = false
 	expedition_window.popup_centered()
 	_update_expedition_face_preview()
 
@@ -190,11 +243,8 @@ func _refresh_expedition_type_options() -> void:
 
 
 func _on_expedition_type_selected(_idx: int) -> void:
-	var ty := _expedition_selected_type()
-	if ty == 2:
-		expedition_item_list.select_mode = ItemList.SELECT_MULTI
-	else:
-		expedition_item_list.select_mode = ItemList.SELECT_SINGLE
+	expedition_item_list.select_mode = ItemList.SELECT_SINGLE
+	expedition_item_list.allow_reselect = true
 	_repopulate_expedition_item_list()
 
 
@@ -204,16 +254,19 @@ func _repopulate_expedition_item_list() -> void:
 	expedition_acquire_candidates.clear()
 	expedition_delete_indices.clear()
 	expedition_synth_indices.clear()
-	if not expedition_waiting_result_choice:
-		expedition_item_list.add_item("远征结束后会出现可选结果。")
-		expedition_item_list.set_item_disabled(0, true)
-		return
+	expedition_synth_selected_slots.clear()
 	var ti := expedition_table_index
 	if ti < 0 or ti >= gs.table_count:
 		return
-	var ty := expedition_pending_kind
+	_ensure_expedition_rows()
+	var table_waiting: bool = bool(table_waiting_result[ti])
+	var ty := int(table_pending_kind[ti])
+	if not table_waiting:
+		expedition_item_list.add_item("远征结束后会出现可选结果。")
+		expedition_item_list.set_item_disabled(0, true)
+		return
 	if ty == 0:
-		expedition_acquire_candidates = gs.generate_acquire_candidates()
+		expedition_acquire_candidates = (table_acquire_candidates[ti] as Array).duplicate()
 		var i := 0
 		for d in expedition_acquire_candidates:
 			if d is _Die:
@@ -221,7 +274,7 @@ func _repopulate_expedition_item_list() -> void:
 				expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, i)
 			i += 1
 	elif ty == 1:
-		expedition_delete_indices = gs.get_random_delete_candidate_indices(ti)
+		expedition_delete_indices = (table_delete_indices[ti] as Array).duplicate()
 		for j in range(expedition_delete_indices.size()):
 			var di := expedition_delete_indices[j]
 			var summ := ""
@@ -231,21 +284,55 @@ func _repopulate_expedition_item_list() -> void:
 			expedition_item_list.add_item("删除 池位%d: %s" % [di + 1, summ])
 			expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, di)
 	elif ty == 2:
-		expedition_synth_indices = gs.get_random_synth_candidate_indices(ti)
+		expedition_synth_indices = (table_synth_indices[ti] as Array).duplicate()
 		for j in range(expedition_synth_indices.size()):
 			var di2 := expedition_synth_indices[j]
 			var summ2 := ""
 			var d2: Variant = gs.get_die_at_pool_slot(ti, di2)
 			if d2 is _Die:
 				summ2 = (d2 as _Die).summary_label()
-			expedition_item_list.add_item("池位%d: %s" % [di2 + 1, summ2])
+			expedition_item_list.add_item("□ 池位%d: %s" % [di2 + 1, summ2])
 			expedition_item_list.set_item_metadata(expedition_item_list.item_count - 1, di2)
+		_refresh_synth_item_marks()
 	if expedition_item_list.item_count > 0:
 		expedition_item_list.select(0)
 	_update_expedition_face_preview()
 
 
 func _on_expedition_item_list_selected(_index: int) -> void:
+	if _synth_repainting:
+		return
+	if expedition_waiting_result_choice and expedition_pending_kind == 2:
+		_handle_synth_item_click(_index)
+		return
+	_update_expedition_face_preview()
+
+
+func _refresh_synth_item_marks() -> void:
+	_synth_repainting = true
+	for i in range(expedition_item_list.item_count):
+		var slot := int(expedition_item_list.get_item_metadata(i))
+		var mark := "■" if expedition_synth_selected_slots.has(slot) else "□"
+		var raw := expedition_item_list.get_item_text(i)
+		var pos := raw.find(" ")
+		var tail := raw.substr(pos + 1) if pos >= 0 else raw
+		expedition_item_list.set_item_text(i, "%s %s" % [mark, tail])
+	expedition_item_list.deselect_all()
+	_synth_repainting = false
+
+
+func _handle_synth_item_click(item_index: int) -> void:
+	if item_index < 0 or item_index >= expedition_item_list.item_count:
+		return
+	var slot := int(expedition_item_list.get_item_metadata(item_index))
+	var pos := expedition_synth_selected_slots.find(slot)
+	if pos >= 0:
+		expedition_synth_selected_slots.remove_at(pos)
+	else:
+		if expedition_synth_selected_slots.size() >= 2:
+			expedition_synth_selected_slots.remove_at(0)
+		expedition_synth_selected_slots.append(slot)
+	_refresh_synth_item_marks()
 	_update_expedition_face_preview()
 
 
@@ -268,6 +355,10 @@ func _update_expedition_face_preview() -> void:
 		else:
 			expedition_face_preview.apply_die(null)
 	elif ty == 1 or ty == 2:
+		if ty == 2 and expedition_synth_selected_slots.size() > 0:
+			var last_slot := expedition_synth_selected_slots[expedition_synth_selected_slots.size() - 1]
+			expedition_face_preview.apply_die(gs.get_die_at_pool_slot(expedition_table_index, last_slot))
+			return
 		var sel2 := expedition_item_list.get_selected_items()
 		if sel2.is_empty():
 			expedition_face_preview.apply_die(null)
@@ -286,6 +377,8 @@ func _set_expedition_item_list_interactive(on: bool) -> void:
 func _on_expedition_start_pressed() -> void:
 	var gs: GameState = _host.game_state
 	var ti := expedition_table_index
+	_ensure_expedition_rows()
+	_sync_window_state_flags()
 	if ti < 0 or ti >= gs.table_count:
 		return
 	if ti < _host.table_expedition_timers.size() and _host.table_expedition_timers[ti].time_left > 0.0:
@@ -296,51 +389,93 @@ func _on_expedition_start_pressed() -> void:
 	var ty := _expedition_selected_type()
 	_reset_expedition_pending_selection()
 	if ty == 1:
-		if gs.get_table_dice_count(ti) <= GameState.MIN_DICE_COUNT:
-			_host.status_label.text = "上场至少2颗骰子时才能删骰远征。"
+		if gs.get_pool_filled_count(ti) <= gs.get_table_dice_count(ti):
+			_host.status_label.text = "删骰远征需要骰池有多余骰子（不影响上场骰位）。"
 			return
 	elif ty == 2:
-		if gs.get_table_dice_count(ti) < 2:
-			_host.status_label.text = "上场至少2颗骰子时才能合成远征。"
+		if not gs.can_start_synth_expedition(ti):
+			_host.status_label.text = "合成远征需要该桌骰池至少达到上限+1。"
 			return
 	elif ty != 0:
 		_host.status_label.text = "没有可用的远征类型。"
 		return
-	expedition_pending_kind = ty
+	table_pending_kind[ti] = ty
+	table_waiting_result[ti] = false
+	table_acquire_candidates[ti] = []
+	table_delete_indices[ti] = []
+	table_synth_indices[ti] = []
+	_sync_window_state_flags()
 	var dur := gs.get_expedition_duration_sec() / maxf(0.05, float(Engine.time_scale))
 	_host.table_expedition_timers[ti].wait_time = dur
 	_host.table_expedition_timers[ti].start()
-	expedition_waiting_result_choice = false
 	expedition_type_option.disabled = true
 	_set_expedition_item_list_interactive(false)
 	expedition_item_list.clear()
 	expedition_start_button.disabled = true
 	expedition_start_button.text = "远征进行中..."
-	expedition_close_button.disabled = true
+	expedition_close_button.disabled = false
 	_host.status_label.text = "桌%d 远征进行中（%.1fs）…" % [ti + 1, dur]
 	expedition_hint_label.text = "桌%d 远征进行中，结束后请选择结果并确认。" % [ti + 1]
 	_host._refresh_all()
 
 
 func on_table_expedition_timer_timeout(table_index: int) -> void:
-	if table_index != expedition_table_index:
+	_ensure_expedition_rows()
+	if table_index < 0 or table_index >= table_pending_kind.size():
 		return
-	expedition_waiting_result_choice = true
-	expedition_type_option.disabled = true
-	_set_expedition_item_list_interactive(true)
-	expedition_hint_label.text = "桌%d 远征已完成：请选择结果并点击「确认结果」。" % [table_index + 1]
-	_repopulate_expedition_item_list()
-	expedition_start_button.text = "确认结果"
-	expedition_start_button.disabled = false
-	expedition_close_button.disabled = true
+	var ty := int(table_pending_kind[table_index])
+	if ty < 0:
+		return
+	table_waiting_result[table_index] = true
+	var gs: GameState = _host.game_state
+	if ty == 0:
+		table_acquire_candidates[table_index] = gs.generate_acquire_candidates()
+	elif ty == 1:
+		table_delete_indices[table_index] = gs.get_random_delete_candidate_indices(table_index)
+	elif ty == 2:
+		table_synth_indices[table_index] = gs.get_random_synth_candidate_indices(table_index)
+	_host._save_game()
 	_host.status_label.text = "桌%d 远征完成，等待选择结果。" % [table_index + 1]
+	if expedition_window.visible and expedition_table_index == table_index:
+		_sync_window_state_flags()
+		expedition_type_option.disabled = true
+		_set_expedition_item_list_interactive(true)
+		expedition_hint_label.text = "桌%d 远征已完成：请选择结果并点击「确认结果」。" % [table_index + 1]
+		_repopulate_expedition_item_list()
+		expedition_start_button.text = "确认结果"
+		expedition_start_button.disabled = false
+		expedition_close_button.disabled = false
 	_host._refresh_all()
 
 
 func _confirm_expedition_result() -> void:
 	var gs: GameState = _host.game_state
 	var ti := expedition_table_index
+	_ensure_expedition_rows()
+	_sync_window_state_flags()
 	if ti < 0 or ti >= gs.table_count:
+		return
+	if not expedition_waiting_result_choice:
+		_host.status_label.text = "该桌当前没有待确认的远征结果。"
+		return
+	var has_any := true
+	if expedition_pending_kind == 0:
+		has_any = table_acquire_candidates[ti] is Array and (table_acquire_candidates[ti] as Array).size() > 0
+	elif expedition_pending_kind == 1:
+		has_any = table_delete_indices[ti] is Array and (table_delete_indices[ti] as Array).size() > 0
+	elif expedition_pending_kind == 2:
+		has_any = table_synth_indices[ti] is Array and (table_synth_indices[ti] as Array).size() > 0
+	if not has_any:
+		_clear_table_expedition_state(ti)
+		_sync_window_state_flags()
+		expedition_type_option.disabled = false
+		_set_expedition_item_list_interactive(false)
+		expedition_start_button.text = "开始远征"
+		expedition_start_button.disabled = false
+		expedition_close_button.disabled = false
+		expedition_hint_label.text = "桌%d：该次远征结果为空，已自动取消。" % [ti + 1]
+		_host.status_label.text = "桌%d 远征结果为空，已取消。" % [ti + 1]
+		_host._refresh_all()
 		return
 	_reset_expedition_pending_selection()
 	if expedition_pending_kind == 0:
@@ -360,33 +495,42 @@ func _confirm_expedition_result() -> void:
 			return
 		expedition_pending_delete_die_idx = int(expedition_item_list.get_item_metadata(sel1[0]))
 	elif expedition_pending_kind == 2:
-		var sel2 := expedition_item_list.get_selected_items()
-		if sel2.size() != 2:
-			_host.status_label.text = "合成远征：请在列表中点选两颗骰子。"
+		if expedition_synth_selected_slots.size() != 2:
+			_host.status_label.text = "合成远征：请依次点选两颗骰子。"
 			return
-		var a := int(expedition_item_list.get_item_metadata(sel2[0]))
-		var b := int(expedition_item_list.get_item_metadata(sel2[1]))
+		var a := int(expedition_synth_selected_slots[0])
+		var b := int(expedition_synth_selected_slots[1])
 		expedition_pending_synth_lo = mini(a, b)
 		expedition_pending_synth_hi = maxi(a, b)
 	else:
 		_host.status_label.text = "远征状态异常。"
 		return
 	var msg := ""
+	var ok := false
 	if expedition_pending_kind == 0:
 		var die: _Die = expedition_acquire_candidates[expedition_pending_acquire_idx] as _Die
 		var r := gs.apply_expedition_acquire(ti, die)
-		msg = "获得新骰子。" if r["ok"] else String(r["message"])
+		ok = bool(r["ok"])
+		msg = "获得新骰子。" if ok else String(r["message"])
 	elif expedition_pending_kind == 1:
 		var r2 := gs.apply_expedition_delete(ti, expedition_pending_delete_die_idx)
-		msg = "已删除骰子。" if r2["ok"] else String(r2["message"])
+		ok = bool(r2["ok"])
+		msg = "已删除骰子。" if ok else String(r2["message"])
 	elif expedition_pending_kind == 2:
+		if not gs.can_start_synth_expedition(ti):
+			_host.status_label.text = "合成远征需要该桌骰池至少达到上限+1。"
+			return
 		var r3 := gs.apply_expedition_synth(ti, expedition_pending_synth_lo, expedition_pending_synth_hi)
-		msg = "合成完成。" if r3["ok"] else String(r3["message"])
+		ok = bool(r3["ok"])
+		msg = "合成完成。" if ok else String(r3["message"])
+	if not ok:
+		_host.status_label.text = "桌%d %s" % [ti + 1, msg]
+		return
 	var after := gs.estimate_income_per_second()
 	expedition_income_label.text = "远征前估算收益/秒: %.1f  →  现在: %.1f" % [expedition_income_before, after]
 	_host.status_label.text = "桌%d %s" % [ti + 1, msg]
-	expedition_waiting_result_choice = false
-	expedition_pending_kind = -1
+	_clear_table_expedition_state(ti)
+	_sync_window_state_flags()
 	_reset_expedition_pending_selection()
 	expedition_type_option.disabled = false
 	_set_expedition_item_list_interactive(false)

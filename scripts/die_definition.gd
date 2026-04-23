@@ -1,6 +1,8 @@
 class_name DieDefinition
 extends RefCounted
 
+const RARITY_MAX: int = 12
+
 var faces: PackedInt32Array
 var rarity: int = 0
 var buff_key: String = ""
@@ -55,11 +57,24 @@ static func create_random_biased() -> RefCounted:
 
 
 static func merge(a: RefCounted, b: RefCounted) -> RefCounted:
+	var af: Array[int] = []
+	var bf: Array[int] = []
+	for i in range(6):
+		af.append(int(a.faces[i]))
+		bf.append(int(b.faces[i]))
+	af.shuffle()
+	bf.shuffle()
+	var merged_faces: Array[int] = []
+	for i in range(6):
+		merged_faces.append(maxi(af[i], bf[i]))
+	merged_faces.sort()
 	var p := PackedInt32Array()
 	for i in range(6):
-		p.append(maxi(int(a.faces[i]), int(b.faces[i])))
+		p.append(merged_faces[i])
 	var out: RefCounted = new(p)
-	out.rarity = maxi(a.rarity, b.rarity)
+	var ra := int(a.rarity)
+	var rb := int(b.rarity)
+	out.rarity = clampi(maxi(ra, rb) + (1 if ra == rb else 0), 0, RARITY_MAX)
 	if a.buff_key != "" and b.buff_key != "":
 		out.buff_key = a.buff_key + "+" + b.buff_key
 	elif b.buff_key != "":

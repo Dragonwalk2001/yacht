@@ -50,6 +50,7 @@ const THROW_PULSE_SEC: float = 0.08
 
 func _ready() -> void:
 	randomize()
+	set_process(true)
 	_dialogs = _UIDialogs.new(self)
 	_growth = _UIGrowthTree.new(self)
 	_expedition = _UIExpedition.new(self)
@@ -67,6 +68,13 @@ func _ready() -> void:
 	_bind_signals()
 	_apply_tables_scroll_min_height()
 	_apply_table_panel_density()
+
+
+func _process(_delta: float) -> void:
+	for t in range(game_state.table_count):
+		if t < table_expedition_timers.size() and table_expedition_timers[t].time_left > 0.0:
+			_update_all_table_buttons()
+			return
 
 
 func _growth_deferred_update_canvas() -> void:
@@ -283,8 +291,6 @@ func _refresh_score_board() -> void:
 
 
 func _update_all_table_buttons() -> void:
-	var active_exp_table := _expedition.active_expedition_table_index()
-	var any_exp_busy := active_exp_table >= 0
 	for t in range(game_state.table_count):
 		var throwing := table_is_throwing[t]
 		table_roll_buttons[t].disabled = throwing or game_state.is_table_auto_enabled(t) or not game_state.can_manual_roll(t)
@@ -296,15 +302,24 @@ func _update_all_table_buttons() -> void:
 		table_dice_upgrade_buttons[t].disabled = dice_cost < 0 or game_state.coin_1 < dice_cost
 		var exb2 := table_expedition_buttons[t] as Button
 		var exp_busy := t < table_expedition_timers.size() and table_expedition_timers[t].time_left > 0.0
-		var waiting_other := _expedition.expedition_waiting_result_choice and _expedition.expedition_table_index >= 0 and _expedition.expedition_table_index != t
-		var busy_other := any_exp_busy and active_exp_table != t
-		exb2.disabled = not game_state.tech_expedition_portal_unlocked or exp_busy or waiting_other or busy_other
+		var exp_waiting := _expedition.is_table_waiting_result(t)
+		if exp_busy:
+			var tm: Timer = table_expedition_timers[t] as Timer
+			var total := maxf(0.01, tm.wait_time)
+			var ratio := clampf((total - tm.time_left) / total, 0.0, 1.0)
+			exb2.text = "远征[%d%%]" % int(round(ratio * 100.0))
+		elif exp_waiting:
+			exb2.text = "远征[可确认]"
+		else:
+			exb2.text = "远征"
+		exb2.disabled = not game_state.tech_expedition_portal_unlocked or exp_busy
 	for t in range(game_state.table_count, GameState.MAX_TABLE_COUNT):
 		table_roll_buttons[t].disabled = true
 		table_settle_buttons[t].disabled = true
 		table_auto_buttons[t].disabled = true
 		if t < table_expedition_buttons.size():
 			(table_expedition_buttons[t] as Button).disabled = true
+			(table_expedition_buttons[t] as Button).text = "远征"
 
 
 func _on_roll_pressed(table_index: int) -> void:
