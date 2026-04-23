@@ -9,6 +9,7 @@ const SAVE_DATA_VERSION_V3: int = 3
 const SAVE_DATA_VERSION_V4: int = 4
 const SAVE_DATA_VERSION_V5: int = 5
 const SAVE_DATA_VERSION_V6: int = 6
+const SAVE_DATA_VERSION_V7: int = 7
 
 const TABLE_DICE_POOL_BASE: int = 20
 
@@ -22,6 +23,7 @@ const MIN_AUTO_INTERVAL: float = 1.0
 const AUTO_INTERVAL_STEP: float = 0.2
 const MAX_AUTO_SPEED_LEVEL: int = 10
 const AUTO_SPEED_BASE_COST: int = 100
+const PATTERN_UPGRADE_PER_LEVEL: float = 0.25
 
 const BASE_DICE_CAP_BEFORE_TECH: int = 5
 const TECH_COST_EXPEDITION_ENTRY: int = 180
@@ -53,8 +55,13 @@ var last_settlement_label: String = "未结算"
 var last_settlement_income: int = 0
 var last_settlement_base: int = 0
 var last_settlement_multiplier: float = 1.0
+var last_settlement_snapshot: Dictionary = {}
 var recent_income_window: Array[Dictionary] = []
 var dice_face_stats = DiceFaceStatsT.new()
+var manual_mult_level: int = 0
+var table_mult_level: int = 0
+var global_mult_level: int = 0
+var pattern_levels: Dictionary = {}
 
 var tech_expedition_portal_unlocked: bool = false
 var tech_delete_expedition_unlocked: bool = false
@@ -88,8 +95,10 @@ func initialize() -> void:
 	last_settlement_income = 0
 	last_settlement_base = 0
 	last_settlement_multiplier = 1.0
+	last_settlement_snapshot = {}
 	recent_income_window.clear()
 	dice_face_stats.reset()
+	_ensure_pattern_levels_defaults()
 	tech_expedition_portal_unlocked = false
 	tech_delete_expedition_unlocked = false
 	tech_synth_expedition_unlocked = false
@@ -569,14 +578,15 @@ func settle_manual_turn(table_index: int) -> Dictionary:
 	if not can_settle_manual(table_index):
 		return {"ok": false, "message": "请至少掷骰一次后再结算。"}
 	var dice := _clone_dice_row(table_dice_values[table_index], get_table_dice_count(table_index))
-	var snapshot := _evaluate_income_for_dice(dice)
-	var income := int(snapshot["income"])
+	var snapshot := evaluate_income_snapshot(dice, table_index, "manual")
+	var income := int(snapshot["final_income"])
 	_add_coin(income)
 	total_manual_turns += 1
 	last_settlement_label = String(snapshot["label"])
-	last_settlement_base = int(snapshot["base"])
-	last_settlement_multiplier = float(snapshot["multiplier"])
+	last_settlement_base = int(snapshot["base_score"])
+	last_settlement_multiplier = float(snapshot["pattern_multiplier"])
 	last_settlement_income = income
+	last_settlement_snapshot = snapshot.duplicate(true)
 	_record_income_event(income)
 	_reset_table_turn(table_index)
 	return {
@@ -607,8 +617,8 @@ func finalize_auto_throw_for_table(table_index: int) -> Dictionary:
 	if staging.is_empty():
 		return {"ok": false, "message": "没有待结算的自动投掷。"}
 	var dice := _clone_dice_row(staging, get_table_dice_count(table_index))
-	var snapshot := _evaluate_income_for_dice(dice)
-	var income := int(snapshot["income"])
+	var snapshot := evaluate_income_snapshot(dice, table_index, "auto")
+	var income := int(snapshot["final_income"])
 	table_dice_values[table_index] = dice.duplicate()
 	table_auto_staging[table_index] = []
 	table_rolls_used[table_index] = 0
@@ -616,9 +626,10 @@ func finalize_auto_throw_for_table(table_index: int) -> Dictionary:
 	_add_coin(income)
 	total_auto_turns += 1
 	last_settlement_label = "%s(自动桌%d)" % [String(snapshot["label"]), table_index + 1]
-	last_settlement_base = int(snapshot["base"])
-	last_settlement_multiplier = float(snapshot["multiplier"])
+	last_settlement_base = int(snapshot["base_score"])
+	last_settlement_multiplier = float(snapshot["pattern_multiplier"])
 	last_settlement_income = income
+	last_settlement_snapshot = snapshot.duplicate(true)
 	_record_income_event(income)
 	return {
 		"ok": true,
@@ -773,13 +784,29 @@ func is_table_auto_enabled(table_index: int) -> bool:
 
 
 func get_progress_multiplier() -> float:
-	var sum_extra := 0
-	for i in range(table_count):
-		sum_extra += int(table_dice_counts[i]) - MIN_DICE_COUNT
-	var avg_extra := float(sum_extra) / float(maxi(1, table_count))
-	var dice_factor := 1.0 + avg_extra * 0.16
-	var table_factor := 1.0 + float(table_count - MIN_TABLE_COUNT) * 0.10
-	return dice_factor * table_factor
+	return get_growth_multiplier_total(-1, "legacy")
+
+
+func get_growth_multiplier_total(table_index: int, settle_mode: String) -> float:
+	var zones := get_growth_zones(table_index, settle_mode, [], [])
+	return float(zones["growth_multiplier_total"])
+
+
+func get_growth_zones(table_index: int, settle_mode: String, used_indices: Array[int], die_defs: Array) -> Dictionary:
+	var manual_zone := 1.0 + 0.25 * float(maxi(0, manual_mult_level))
+	if settle_mode == "auto":
+		manual_zone = 1.0
+	var effective_table_level := maxi(0, table_count - MIN_TABLE_COUNT) + maxi(0, table_mult_level)
+	var table_zone := 1.0 + 0.10 * float(effective_table_level)
+	var global_zone := 1.0 + 0.25 * float(maxi(0, global_mult_level))
+	var rarity_zone := _compute_rarity_zone(used_indices, die_defs)
+	return {
+		"manual_zone": manual_zone,
+		"table_zone": table_zone,
+		"global_zone": global_zone,
+		"rarity_zone": rarity_zone,
+		"growth_multiplier_total": manual_zone * table_zone * global_zone * rarity_zone
+	}
 
 
 func estimate_income_per_second() -> float:
@@ -830,18 +857,80 @@ func _clone_dice_row(source: Variant, expected_count: int) -> Array[int]:
 	return out
 
 
-func _evaluate_income_for_dice(dice: Array[int]) -> Dictionary:
+func evaluate_income_snapshot(dice: Array[int], table_index: int, settle_mode: String) -> Dictionary:
+	_ensure_pattern_levels_defaults()
 	var eval := ScoringRules.evaluate_best_pattern(dice)
+	var pattern_id := String(eval["id"])
 	var base_score := int(eval["base_score"])
-	var pattern_multiplier := float(eval["multiplier"])
-	var progress_multiplier := get_progress_multiplier()
-	var income := int(round(float(base_score) * pattern_multiplier * progress_multiplier))
+	var pattern_multiplier_base := float(eval["multiplier"])
+	var pattern_level := int(pattern_levels.get(pattern_id, 0))
+	var pattern_multiplier_upgrade := 1.0 + PATTERN_UPGRADE_PER_LEVEL * float(maxi(0, pattern_level))
+	var pattern_multiplier := pattern_multiplier_base * pattern_multiplier_upgrade
+	var used_indices: Array[int] = []
+	for idx in eval.get("used_indices", []):
+		used_indices.append(int(idx))
+	if used_indices.is_empty():
+		for i in range(dice.size()):
+			used_indices.append(i)
+	var die_defs := _get_die_defs_for_snapshot(table_index, dice.size())
+	var zones := get_growth_zones(table_index, settle_mode, used_indices, die_defs)
+	var growth_multiplier_total := float(zones["growth_multiplier_total"])
+	var income_raw := float(base_score) * pattern_multiplier * growth_multiplier_total
+	var final_income := maxi(1, int(round(income_raw)))
 	return {
+		"settle_mode": settle_mode,
+		"base_score": base_score,
+		"pattern_id": pattern_id,
 		"label": String(eval["label"]),
+		"pattern_multiplier_base": pattern_multiplier_base,
+		"pattern_multiplier_upgrade": pattern_multiplier_upgrade,
+		"pattern_multiplier": pattern_multiplier,
+		"manual_zone": float(zones["manual_zone"]),
+		"table_zone": float(zones["table_zone"]),
+		"global_zone": float(zones["global_zone"]),
+		"rarity_zone": float(zones["rarity_zone"]),
+		"growth_multiplier_total": growth_multiplier_total,
+		"used_indices": used_indices,
+		"income_raw": income_raw,
+		"final_income": final_income,
 		"base": base_score,
 		"multiplier": pattern_multiplier,
-		"income": maxi(1, income)
+		"income": final_income
 	}
+
+
+func _get_die_defs_for_snapshot(table_index: int, expected_count: int) -> Array:
+	if _ensure_table_index(table_index):
+		return _get_die_defs_row_no_resample(table_index)
+	var fallback: Array = []
+	for _i in range(expected_count):
+		fallback.append(_Die.create_standard())
+	return fallback
+
+
+func _compute_rarity_zone(used_indices: Array[int], die_defs: Array) -> float:
+	var zone := 1.0
+	for idx in used_indices:
+		var i := int(idx)
+		if i < 0 or i >= die_defs.size():
+			continue
+		var d: Variant = die_defs[i]
+		if d is _Die:
+			zone *= _rarity_weight(int((d as _Die).rarity))
+	return maxf(1.0, zone)
+
+
+func _rarity_weight(rarity: int) -> float:
+	var r := maxi(0, rarity)
+	if r <= 0:
+		return 1.0
+	return 1.5 * pow(2.0, float(r - 1))
+
+
+func _ensure_pattern_levels_defaults() -> void:
+	for pattern_id in ScoringRules.get_pattern_order():
+		if not pattern_levels.has(pattern_id):
+			pattern_levels[pattern_id] = 0
 
 
 func _add_coin(amount: int) -> void:
@@ -868,7 +957,7 @@ func _record_income_event(amount: int) -> void:
 
 func to_save_data() -> Dictionary:
 	return {
-		"version": SAVE_DATA_VERSION_V6,
+		"version": SAVE_DATA_VERSION_V7,
 		"coin_1": coin_1,
 		"total_coin_earned": total_coin_earned,
 		"table_count": table_count,
@@ -880,7 +969,12 @@ func to_save_data() -> Dictionary:
 		"last_settlement_income": last_settlement_income,
 		"last_settlement_base": last_settlement_base,
 		"last_settlement_multiplier": last_settlement_multiplier,
+		"last_settlement_snapshot": last_settlement_snapshot.duplicate(true),
 		"recent_income_window": recent_income_window.duplicate(true),
+		"manual_mult_level": manual_mult_level,
+		"table_mult_level": table_mult_level,
+		"global_mult_level": global_mult_level,
+		"pattern_levels": pattern_levels.duplicate(true),
 		"table_dice_counts": _int_array_to_save(table_dice_counts),
 		"table_rolls_used": _int_array_to_save(table_rolls_used),
 		"table_dice_values": _nested_dice_to_save(table_dice_values),
@@ -915,6 +1009,19 @@ func load_from_save_data(data: Dictionary) -> bool:
 	last_settlement_income = maxi(0, int(data.get("last_settlement_income", 0)))
 	last_settlement_base = maxi(0, int(data.get("last_settlement_base", 0)))
 	last_settlement_multiplier = maxf(1.0, float(data.get("last_settlement_multiplier", 1.0)))
+	last_settlement_snapshot = {}
+	var snapshot_raw: Variant = data.get("last_settlement_snapshot", {})
+	if snapshot_raw is Dictionary:
+		last_settlement_snapshot = (snapshot_raw as Dictionary).duplicate(true)
+	manual_mult_level = maxi(0, int(data.get("manual_mult_level", 0)))
+	table_mult_level = maxi(0, int(data.get("table_mult_level", 0)))
+	global_mult_level = maxi(0, int(data.get("global_mult_level", 0)))
+	pattern_levels = {}
+	var pattern_raw: Variant = data.get("pattern_levels", {})
+	if pattern_raw is Dictionary:
+		for k in (pattern_raw as Dictionary).keys():
+			pattern_levels[String(k)] = maxi(0, int((pattern_raw as Dictionary)[k]))
+	_ensure_pattern_levels_defaults()
 
 	recent_income_window = []
 	var saved_window: Array = data.get("recent_income_window", [])

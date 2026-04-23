@@ -250,14 +250,30 @@ func _refresh_turn_labels() -> void:
 
 func _refresh_score_board() -> void:
 	var lines: Array[String] = []
+	var snap: Dictionary = game_state.last_settlement_snapshot
+	var pattern_base := float(snap.get("pattern_multiplier_base", game_state.last_settlement_multiplier))
+	var pattern_upg := float(snap.get("pattern_multiplier_upgrade", 1.0))
+	var manual_zone := float(snap.get("manual_zone", 1.0))
+	var table_zone := float(snap.get("table_zone", 1.0))
+	var global_zone := float(snap.get("global_zone", 1.0))
+	var rarity_zone := float(snap.get("rarity_zone", 1.0))
+	var growth_total := float(snap.get("growth_multiplier_total", game_state.get_progress_multiplier()))
 	lines.append("货币1: %d" % [game_state.coin_1])
 	lines.append("总产出: %d" % [game_state.total_coin_earned])
 	lines.append("当前预估收益/秒: %.1f" % [game_state.estimate_income_per_second()])
 	lines.append("最近结算: %s  +%d" % [game_state.last_settlement_label, game_state.last_settlement_income])
-	lines.append("基础点数:%d  判型倍率:%.2f  成长倍率:%.2f" % [
+	lines.append("基础点数:%d  判型:%.2f×%.2f=%.2f" % [
 		game_state.last_settlement_base,
-		game_state.last_settlement_multiplier,
-		game_state.get_progress_multiplier()
+		pattern_base,
+		pattern_upg,
+		pattern_base * pattern_upg
+	])
+	lines.append("成长乘区 手动:%.2f 桌面:%.2f 全局:%.2f 稀有:%.2f 合计:%.2f" % [
+		manual_zone,
+		table_zone,
+		global_zone,
+		rarity_zone,
+		growth_total
 	])
 	lines.append("手动回合:%d  自动回合:%d" % [
 		game_state.total_manual_turns,

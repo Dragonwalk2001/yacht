@@ -88,11 +88,11 @@
 
 `pattern_multiplier = pattern_base_multiplier(pattern_id) * pattern_upgrade_multiplier(pattern_id)`
 
-建议默认：
+建议默认（与成长乘区一致，**每级线性**）：
 
-`pattern_upgrade_multiplier(pattern_id) = pow(1.25, pattern_level[pattern_id])`
+`pattern_upgrade_multiplier(pattern_id) = 1 + 0.25 * pattern_level[pattern_id]`
 
-这样“主打某牌型”的流派才有成长纵深。
+`pattern_level = 0` 时倍率为 `1.0`；与 `manual_zone` / `global_zone` 使用同一每级斜率，便于调参时对齐各乘区增长节奏。
 
 ## 3. 成长倍率系统（重做）
 
@@ -237,7 +237,7 @@
 
 - `base_score = 30`
 - 牌型为四条：`pattern_base = 10.0`
-- 该牌型升级 2 级：`pattern_upgrade = 1.25^2 = 1.5625`
+- 该牌型升级 2 级：`pattern_upgrade = 1 + 0.25 * 2 = 1.5`
 - `manual_zone = 1 + 0.25 * 3 = 1.75`
 - `table_zone = 1 + 0.10 * 4 = 1.40`
 - `global_zone = 1 + 0.25 * 2 = 1.50`
@@ -245,9 +245,9 @@
 
 则：
 
-- `pattern_multiplier = 10.0 * 1.5625 = 15.625`
+- `pattern_multiplier = 10.0 * 1.5 = 15.0`
 - `growth_multiplier_total = 1.75 * 1.40 * 1.50 * 6.75 = 24.80625`
-- `income_raw = 30 * 15.625 * 24.80625 = 11627.9296875`
-- `final_income = round(11627.9296875) = 11628`
+- `income_raw = 30 * 15.0 * 24.80625 = 11162.8125`
+- `final_income = round(11162.8125) = 11163`
 
 该例子主要用于说明“多乘区叠乘”后，收益会显著放大，因此后续需要配套成本曲线一起调。
